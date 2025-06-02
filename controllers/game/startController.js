@@ -23,9 +23,9 @@ export async function startGameSet(req, res) {
             [scheduleId]
         );
 
-        // 승인된 실제 멤버 조회 (부전승 제외)
+        // 승인된 실제 멤버 조회
         const [members] = await connection.query(
-            `SELECT * FROM scheduleMember WHERE scheduleId = ? AND approval = 1 AND (isWalkOver IS NULL OR isWalkOver = 0);`,
+            `SELECT * FROM scheduleMember WHERE scheduleId = ? AND approval = 1;`,
             [scheduleId]
         );
 
@@ -53,6 +53,7 @@ export async function startGameSet(req, res) {
         res.status(200).json({ success: true, message: '게임이 성공적으로 시작되었습니다.' });
     } catch (error) {
         await connection.rollback();
+        console.error('게임시작 에러가 발생함', error);
         res.status(500).json({ success: false, message: '게임 시작 중 오류가 발생했습니다.', error: error.message });
     } finally {
         connection.release();
@@ -74,49 +75,45 @@ async function setMemberKDK(members, scheduleId, connection) {
     }
 }
 
+//인덱싱
+function generateCloseRandomIndexes(count) {
+    // 1부터 count까지의 연속된 숫자를 배열로 생성
+    let indexes = Array.from({ length: count }, (_, i) => i + 1);
+
+    // 배열을 섞으면서 동시에 인접한 숫자들의 간격을 1로 유지
+    for (let i = indexes.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        
+        // swap
+        [indexes[i], indexes[j]] = [indexes[j], indexes[i]];
+    }
+
+    // 간격을 확인하고, 간격이 2 이상 차이나는 경우 수정
+    for (let i = 1; i < indexes.length; i++) {
+        if (Math.abs(indexes[i] - indexes[i - 1]) > 1) {
+            // 서로 간격이 1이 되도록 조정
+            [indexes[i], indexes[i - 1]] = [indexes[i - 1], indexes[i]];
+        }
+    }
+
+    return indexes;
+}
+
 // 싱글 토너먼트 셔플 및 부전승 포함 처리
 async function setTournamentSingleWithWalkoverShuffle(members, scheduleId, connection) {
     const memberCount = members.length;
     const nextPowerOfTwo = Math.pow(2, Math.ceil(Math.log2(memberCount)));
-    const walkOverCount = nextPowerOfTwo - memberCount;
-
-    // 필요한 경우 부전승 멤버 생성
-    if (walkOverCount > 0) {
-        await createWalkOverMembers(scheduleId, walkOverCount, connection);
-    }
-
-    // 전체 멤버 다시 조회
-    const [allMembers] = await connection.query(
-        'SELECT * FROM scheduleMember WHERE scheduleId = ? AND approval = 1',
-        [scheduleId]
-    );
-
-    // 실제 멤버 / 부전승 멤버 분리 및 셔플
-    const realMembers = allMembers.filter(m => !m.isWalkOver);
-    const walkOverMembers = allMembers.filter(m => m.isWalkOver);
-    const shuffledReal = shuffleArray(realMembers);
-    const shuffledWalkOver = shuffleArray(walkOverMembers);
-
-    // 부전승과 번갈아가며 배치
-    let mergeList = [];
-    for (let i = 0; i < shuffledReal.length; i++) {
-        mergeList.push(shuffledReal[i]);
-        if (shuffledWalkOver[i]) mergeList.push(shuffledWalkOver[i]);
-    }
-    if (shuffledWalkOver.length > shuffledReal.length) {
-        mergeList = mergeList.concat(shuffledWalkOver.slice(shuffledReal.length));
-    }
+    const memberIndexList = generateCloseRandomIndexes(nextPowerOfTwo);
 
     // 인덱스 부여
-    for (let i = 0; i < mergeList.length; i++) {
+    for (let i = 0; i < members.length; i++) {
+        const member = members[i];
         await connection.query(
-            'UPDATE scheduleMember SET memberIndex = ? WHERE scheduleId = ? AND uid IS ?',
-            [i + 1, scheduleId, mergeList[i].uid]
+            'UPDATE scheduleMember SET memberIndex = ? WHERE scheduleId = ? AND uid = ?',
+            [memberIndexList[i], scheduleId, member.uid]
         );
     }
 }
-
-
 
 // 복식 토너먼트 셔플 및 부전승 포함 처리
 async function setTournamentDoubleWithWalkoverShuffle(members, scheduleId, connection) {
@@ -128,82 +125,24 @@ async function setTournamentDoubleWithWalkoverShuffle(members, scheduleId, conne
         return acc;
     }, {});
 
-    const teamList = Object.entries(teams);
+    //팀수에 맞게 랜덤 인덱싱
+    const teamList = Object.keys(teams);
     const teamCount = teamList.length;
     const nextPowerOfTwo = Math.pow(2, Math.ceil(Math.log2(teamCount)));
-    const walkOverCount = nextPowerOfTwo - teamCount;
+    const teamIndexList = generateCloseRandomIndexes(nextPowerOfTwo); // 커스텀 함수로 간격 2 미만의 랜덤 인덱스 생성
 
-    // 필요한 경우 부전승 팀 생성
-    if (walkOverCount > 0) {
-        await createWalkOverTeams(scheduleId, walkOverCount, connection);
-    }
+    let index = 0;
+    for (const teamName in teams) {
+        const teamMembers = teams[teamName];
+        const teamIndex = teamIndexList[index]; // 랜덤하게 할당된 인덱스 사용
+        index++;
 
-    // 전체 멤버 재조회 후 팀 재구성
-    const [allMembers] = await connection.query(
-        'SELECT * FROM scheduleMember WHERE scheduleId = ? AND approval = 1',
-        [scheduleId]
-    );
-
-    const realTeams = {};
-    const walkOverTeams = {};
-    for (const member of allMembers) {
-        const key = member.teamName || `개인팀_${member.uid}`;
-        if (member.isWalkOver) {
-            if (!walkOverTeams[key]) walkOverTeams[key] = [];
-            walkOverTeams[key].push(member);
-        } else {
-            if (!realTeams[key]) realTeams[key] = [];
-            realTeams[key].push(member);
-        }
-    }
-
-    // 실제 팀 / 부전승 팀 셔플 후 번갈아 병합
-    const shuffledReal = shuffleArray(Object.entries(realTeams));
-    const shuffledWalkOver = shuffleArray(Object.entries(walkOverTeams));
-
-    let mergedTeams = [];
-    for (let i = 0; i < shuffledReal.length; i++) {
-        mergedTeams.push(shuffledReal[i]);
-        if (shuffledWalkOver[i]) mergedTeams.push(shuffledWalkOver[i]);
-    }
-    if (shuffledWalkOver.length > shuffledReal.length) {
-        mergedTeams = mergedTeams.concat(shuffledWalkOver.slice(shuffledReal.length));
-    }
-
-    // 팀 단위로 memberIndex 부여
-    for (let i = 0; i < mergedTeams.length; i++) {
-        const [, teamMembers] = mergedTeams[i];
         for (const member of teamMembers) {
             await connection.query(
-                'UPDATE scheduleMember SET memberIndex = ? WHERE scheduleId = ? AND uid IS ?',
-                [i + 1, scheduleId, member.uid]
+                'UPDATE scheduleMember SET memberIndex = ? WHERE scheduleId = ? AND uid = ?',
+                [teamIndex, scheduleId, member.uid]
             );
         }
-    }
-}
-
-
-// 부전승 멤버 생성 (싱글 토너먼트용)
-async function createWalkOverMembers(scheduleId, walkOverCount, connection) {
-    for (let i = 1; i <= walkOverCount; i++) {
-        await connection.query(
-            `INSERT INTO scheduleMember (scheduleId, uid, memberIndex, isWalkOver, approval) 
-             VALUES (?, null, ?, 1, 1)`,
-            [scheduleId, 0,] // memberIndex는 나중에 설정
-        );
-    }
-}
-
-// 부전승 팀 생성 (팀 토너먼트용)
-async function createWalkOverTeams(scheduleId, walkOverTeamCount, connection) {
-    for (let i = 1; i <= walkOverTeamCount; i++) {
-        const teamName = `부전승팀${i}`;
-        
-        await connection.query(
-            `INSERT INTO scheduleMember (scheduleId, uid, teamName, memberIndex, isWalkOver, approval) 
-             VALUES (?, null, ?, ?, 1, 1)`,
-            [scheduleId, teamName, 0]
-        );
     }
 }
 
@@ -300,18 +239,6 @@ export async function updateMemberIndex(req, res) {
     }
 }
 
-// 부전승 멤버 정리 (게임 종료 시 사용)
-export async function cleanupWalkOverMembers(scheduleId, connection) {
-    const deleteQuery = `
-        DELETE FROM scheduleMember
-        WHERE scheduleId = ? AND isWalkOver = 1;
-    `;
-    
-    const [result] = await connection.query(deleteQuery, [scheduleId]);
-    console.log(`부전승 멤버 정리 완료: ${result.affectedRows}명 삭제`);
-    return result;
-}
-
 // KDK 규칙에서 최대 인원수 가져오기
 function getMaxMembersFromKDKRules() {
     const singleMax = Object.keys(singleKdkRules).length > 0 
@@ -344,9 +271,9 @@ async function validateGameSetup(scheduleId, connection) {
         throw new Error(`Not a game schedule: ${scheduleId}`);
     }
     
-    // 승인된 멤버 수 확인 (부전승 제외)
+    // 승인된 멤버 수 확인
     const [memberCount] = await connection.query(
-        'SELECT COUNT(*) as count FROM scheduleMember WHERE scheduleId = ? AND approval = 1 AND (isWalkOver IS NULL OR isWalkOver = 0)',
+        'SELECT COUNT(*) as count FROM scheduleMember WHERE scheduleId = ? AND approval = 1',
         [scheduleId]
     );
     
@@ -394,7 +321,7 @@ async function validateGameSetup(scheduleId, connection) {
         } else {
             // 토너먼트 복식: 팀 수 확인
             const [teamCount] = await connection.query(
-                'SELECT COUNT(DISTINCT teamName) as count FROM scheduleMember WHERE scheduleId = ? AND approval = 1 AND (isWalkOver IS NULL OR isWalkOver = 0)',
+                'SELECT COUNT(DISTINCT teamName) as count FROM scheduleMember WHERE scheduleId = ? AND approval = 1',
                 [scheduleId]
             );
             

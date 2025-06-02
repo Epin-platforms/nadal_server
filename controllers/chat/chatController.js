@@ -146,10 +146,13 @@ export async function getChats(req, res) {
 
         // 4. 전체 채팅을 합쳐서 정렬 (chatId 기준 내림차순)
         const allChats = [...unreadChats, ...readChats].sort((a, b) => b.chatId - a.chatId);
+        const unreadCount = await getNotReadChatsCount(roomId, uid);
+
 
         res.json({
             chats: allChats,
-            lastReadChatId: lastRead
+            lastReadChatId: lastRead,
+            unreadCount : unreadCount
         });
 
     } catch (error) {
@@ -488,8 +491,12 @@ export async function reconnectChat(req, res) {
 
         const params = [roomId, regDate, validLastChatId || 0];
         const [rows] = await pool.query(q, params);
+        const unreadCount = await getNotReadChatsCount(roomId, uid); 
         
-        res.json(rows);
+        res.json({
+            data: rows,
+            unreadCount : unreadCount
+        });
     } catch (error) {
         console.error('채팅 재연결 실패', error);
         res.status(500).send();

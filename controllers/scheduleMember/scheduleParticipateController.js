@@ -1,4 +1,5 @@
 import pool from "../../config/database.js";
+import { createNotification } from "../notification/notificationController.js";
 
 export async function participationSchedule(req, res) {
     const conn = await pool.getConnection();
@@ -74,10 +75,16 @@ export async function participationSchedule(req, res) {
 
 // 참가 취소 (단독 신청 취소)
 export async function cancelScheduleParticipation(req, res) {
-    try {
+    try {    
       const { uid } = req.user;
       const { scheduleId } = req.params;
-  
+    
+      const [rows] = await pool.query(`SELECT state FROM schedule WHERE scheduleId = ? AND state = 0`, [scheduleId]);
+
+      if(rows.length == 0){
+        return res.status(404).send();
+      }
+
       const q = `
         DELETE FROM scheduleMember 
         WHERE scheduleId = ? AND uid = ?;
@@ -98,6 +105,13 @@ export async function cancelScheduleParticipation(req, res) {
       const {uid} = req.user;
       const {scheduleId,  teamId} = req.body;
       
+      const [rows] = await pool.query(`SELECT state FROM schedule WHERE scheduleId = ? AND state = 0`, [scheduleId]);
+
+      if(rows.length == 0){
+        return res.status(404).send();
+      }
+
+
       await conn.beginTransaction();
 
       //팀불러오기
@@ -127,6 +141,15 @@ export async function cancelScheduleParticipation(req, res) {
       );
       
       await conn.commit();
+
+      //상대방에게 푸시메시지 보내기
+      const [target] = await pool.query(`SELECT s.title, r.roomName FROM schedule s LEFT JOIN room r ON s.roomId = r.roomId WHERE s.scheduleId = ?`, [scheduleId]);
+      
+      if(target.length > 0){ //타겟이 있을때만
+        const data = target[0];
+        await createNotification(otherUid, `${data.title} 일정에 팀으로 참가됐어요`, `${data.roomName}방에서 지금 확인해보세요`, `/schedule/${scheduleId}`);
+      }
+      
       res.send();
     }catch(error){
       await conn.rollback();

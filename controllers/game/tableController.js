@@ -8,42 +8,58 @@ import { updateScheduleState } from './startController.js';
  */
 async function handleError(connection, error, res, message = '게임 테이블 생성 중 오류가 발생했습니다.') {
     console.error(`게임 테이블 생성 오류:`, error);
-    await connection.rollback();
-    res.status(500).json({ 
-        success: false, 
-        message,
-        error: error.message 
-    });
+    try {
+        if (connection) {
+            await connection.rollback();
+        }
+    } catch (rollbackError) {
+        console.error('롤백 실패:', rollbackError);
+    }
+    
+    if (!res.headersSent) {
+        res.status(500).json({ 
+            success: false, 
+            message,
+            error: error.message 
+        });
+    }
 }
 
 /**
  * 게임 완료 처리 (소켓 이벤트 발송)
  */
 function broadcastGameUpdate(scheduleId, state = 3) {
-    const io = getSocket();
-    io.to(`gameId:${scheduleId}`).emit('refreshMember');
-    io.to(`gameId:${scheduleId}`).emit('refreshGame');
-    io.to(`gameId:${scheduleId}`).emit('changedState', { state });
+    try {
+        const io = getSocket();
+        if (io && scheduleId) {
+            io.to(`gameId:${scheduleId}`).emit('refreshMember');
+            io.to(`gameId:${scheduleId}`).emit('refreshGame');
+            io.to(`gameId:${scheduleId}`).emit('changedState', { state });
+        }
+    } catch (error) {
+        console.error('소켓 브로드캐스트 오류:', error);
+    }
 }
 
 /**
- * 멤버 조회 (부전승 멤버 포함, isWalkOver 명시적 처리)
+ * 실제 참가자 조회 (승인된 멤버만)
  */
-async function getMembers(scheduleId, connection) {
+async function getApprovedMembers(scheduleId, connection) {
     try {
         const query = `
-            SELECT * FROM scheduleMember
+            SELECT uid, memberIndex, teamName
+            FROM scheduleMember
             WHERE scheduleId = ? AND approval = 1
             ORDER BY memberIndex ASC
         `;
         
         const [rows] = await connection.query(query, [scheduleId]);
         
-        // isWalkOver 필드 정규화 (1, true, '1' 모두 true로 처리)
         return rows.map(member => ({
             ...member,
-            isWalkOver: member.isWalkOver === 1 || member.isWalkOver === true || member.isWalkOver === '1'
-        }));
+            memberIndex: parseInt(member.memberIndex) || 0
+        })).filter(member => member.uid && member.memberIndex > 0);
+        
     } catch (error) {
         console.error('멤버 조회 오류:', error);
         return [];
@@ -51,10 +67,13 @@ async function getMembers(scheduleId, connection) {
 }
 
 /**
- * 실제 참가자만 필터링 (부전승 제외)
+ * 토너먼트용 2의 배수 계산
  */
-function getRealMembers(members) {
-    return members.filter(member => !member.isWalkOver);
+function getNextPowerOfTwo(number) {
+    if (number <= 1) return 2;
+    let power = 1;
+    while (power < number) power <<= 1;
+    return power;
 }
 
 /**
@@ -74,10 +93,9 @@ export async function createSingleKDK(req, res) {
 
         await connection.beginTransaction();
 
-        const members = await getMembers(scheduleId, connection);
-        const realMembers = getRealMembers(members);
+        const members = await getApprovedMembers(scheduleId, connection);
 
-        if (realMembers.length < 4) {
+        if (members.length < 4) {
             await connection.rollback();
             return res.status(400).json({ 
                 success: false, 
@@ -85,20 +103,20 @@ export async function createSingleKDK(req, res) {
             });
         }
 
-        const rule = singleKdkRules[realMembers.length];
+        const rule = singleKdkRules[members.length];
         if (!rule) {
             await connection.rollback();
             return res.status(400).json({ 
                 success: false, 
-                message: `${realMembers.length}명에 대한 KDK 단식 규칙을 찾을 수 없습니다.` 
+                message: `${members.length}명에 대한 KDK 단식 규칙을 찾을 수 없습니다.` 
             });
         }
 
         const gameTables = [];
         for (let i = 0; i < rule.length; i++) {
             const [a, b] = rule[i];
-            const player1 = realMembers[a]?.uid;
-            const player2 = realMembers[b]?.uid;
+            const player1 = members[a]?.uid;
+            const player2 = members[b]?.uid;
             
             if (player1 && player2) {
                 gameTables.push([
@@ -162,10 +180,9 @@ export async function createDoubleKDK(req, res) {
 
         await connection.beginTransaction();
 
-        const members = await getMembers(scheduleId, connection);
-        const realMembers = getRealMembers(members);
+        const members = await getApprovedMembers(scheduleId, connection);
 
-        if (realMembers.length < 5) {
+        if (members.length < 5) {
             await connection.rollback();
             return res.status(400).json({ 
                 success: false, 
@@ -173,21 +190,21 @@ export async function createDoubleKDK(req, res) {
             });
         }
 
-        const rule = doubleKdkRules[realMembers.length];
+        const rule = doubleKdkRules[members.length];
         if (!rule) {
             await connection.rollback();
             return res.status(400).json({ 
                 success: false, 
-                message: `${realMembers.length}명에 대한 KDK 복식 규칙을 찾을 수 없습니다.` 
+                message: `${members.length}명에 대한 KDK 복식 규칙을 찾을 수 없습니다.` 
             });
         }
 
         const gameTables = [];
         for (const match of rule) {
-            const team1Player1 = realMembers[match.team1[0]]?.uid;
-            const team1Player2 = realMembers[match.team1[1]]?.uid;
-            const team2Player1 = realMembers[match.team2[0]]?.uid;
-            const team2Player2 = realMembers[match.team2[1]]?.uid;
+            const team1Player1 = members[match.team1[0]]?.uid;
+            const team1Player2 = members[match.team1[1]]?.uid;
+            const team2Player1 = members[match.team2[0]]?.uid;
+            const team2Player2 = members[match.team2[1]]?.uid;
             
             if (team1Player1 && team1Player2 && team2Player1 && team2Player2) {
                 gameTables.push([
@@ -245,7 +262,7 @@ function calculateTotalRounds(numberOfParticipants) {
 }
 
 /**
- * 토너먼트 단식 게임 테이블 생성
+ * 토너먼트 단식 게임 테이블 생성 - memberIndex 기반 매칭
  */
 export async function createSingleTournament(req, res) {
     const connection = await pool.getConnection();
@@ -261,16 +278,27 @@ export async function createSingleTournament(req, res) {
 
         await connection.beginTransaction();
 
-        const members = await getMembers(scheduleId, connection);
-        if (members.length < 2) {
+        const members = await getApprovedMembers(scheduleId, connection);
+        if (members.length < 4) {
             await connection.rollback();
             return res.status(400).json({ 
                 success: false, 
-                message: '토너먼트는 최소 2명이 필요합니다.' 
+                message: '토너먼트는 최소 4명이 필요합니다.' 
             });
         }
 
-        const totalRounds = calculateTotalRounds(members.length);
+        // 2의 배수로 슬롯 수 계산
+        const totalSlots = getNextPowerOfTwo(members.length);
+        const totalRounds = calculateTotalRounds(totalSlots);
+        
+        // memberIndex를 키로 하는 맵 생성
+        const memberIndexMap = new Map();
+        members.forEach(member => {
+            if (member.memberIndex && member.memberIndex > 0) {
+                memberIndexMap.set(member.memberIndex, member);
+            }
+        });
+
         const tournamentTables = [];
 
         // 각 라운드별 게임 테이블 생성
@@ -282,23 +310,23 @@ export async function createSingleTournament(req, res) {
                 const tableId = (round * 1000) + game;
                 
                 if (round === 1) {
-                    // 첫 라운드: 실제 참가자 배치
-                    const player1Index = (game - 1) * 2;
-                    const player2Index = player1Index + 1;
+                    // 첫 라운드: memberIndex 기반 매칭 (1vs2, 3vs4, 5vs6, 7vs8...)
+                    const player1Index = (game - 1) * 2 + 1;  // 1, 3, 5, 7...
+                    const player2Index = player1Index + 1;     // 2, 4, 6, 8...
                     
-                    const player1 = members[player1Index] || null;
-                    const player2 = members[player2Index] || null;
+                    const player1 = memberIndexMap.get(player1Index);
+                    const player2 = memberIndexMap.get(player2Index);
                     
-                    // 부전승 처리: 상대가 없거나 상대가 부전승인 경우
-                    const isWalkOver = !player2 || player2.isWalkOver;
+                    // 부전승 처리: 상대가 없는 경우
+                    const isWalkOver = !player1 || !player2;
                     
                     tournamentTables.push([
                         tableId,
                         scheduleId,
                         player1?.uid || null,
                         player2?.uid || null,
-                        isWalkOver ? (player1?.isWalkOver ? null : 0) : 0,
-                        isWalkOver ? (player2?.isWalkOver ? null : 0) : 0,
+                        0,  // score1
+                        0,  // score2
                         isWalkOver
                     ]);
                 } else {
@@ -330,7 +358,9 @@ export async function createSingleTournament(req, res) {
             success: true, 
             message: '토너먼트 단식 게임 테이블이 생성되었습니다.',
             rounds: totalRounds,
-            totalGames: tournamentTables.length
+            totalGames: tournamentTables.length,
+            slots: totalSlots,
+            actualMembers: members.length
         });
 
     } catch (error) {
@@ -341,7 +371,7 @@ export async function createSingleTournament(req, res) {
 }
 
 /**
- * 멤버를 팀으로 그룹화 (isWalkOver 고려)
+ * 멤버를 팀으로 그룹화 - 개선된 버전
  */
 function groupMembersIntoTeams(members) {
     const teamGroups = new Map();
@@ -364,8 +394,7 @@ function groupMembersIntoTeams(members) {
             teams.push({
                 teamName,
                 memberIndex: teamMembers[0].memberIndex || 0,
-                members: teamMembers,
-                isWalkOver: teamMembers.every(member => member.isWalkOver)
+                members: teamMembers
             });
         }
     }
@@ -376,7 +405,7 @@ function groupMembersIntoTeams(members) {
 }
 
 /**
- * 토너먼트 복식 게임 테이블 생성
+ * 토너먼트 복식 게임 테이블 생성 - memberIndex 기반 팀 매칭
  */
 export async function createDoubleTournament(req, res) {
     const connection = await pool.getConnection();
@@ -392,7 +421,7 @@ export async function createDoubleTournament(req, res) {
 
         await connection.beginTransaction();
 
-        const members = await getMembers(scheduleId, connection);
+        const members = await getApprovedMembers(scheduleId, connection);
         const teams = groupMembersIntoTeams(members);
 
         if (teams.length < 2) {
@@ -403,7 +432,18 @@ export async function createDoubleTournament(req, res) {
             });
         }
 
-        const totalRounds = calculateTotalRounds(teams.length);
+        // 2의 배수로 팀 슬롯 수 계산
+        const totalTeamSlots = getNextPowerOfTwo(teams.length);
+        const totalRounds = calculateTotalRounds(totalTeamSlots);
+        
+        // teamIndex를 키로 하는 맵 생성 (첫 번째 멤버의 memberIndex 사용)
+        const teamIndexMap = new Map();
+        teams.forEach(team => {
+            if (team.memberIndex && team.memberIndex > 0) {
+                teamIndexMap.set(team.memberIndex, team);
+            }
+        });
+
         const tournamentTables = [];
 
         // 각 라운드별 게임 테이블 생성
@@ -415,15 +455,15 @@ export async function createDoubleTournament(req, res) {
                 const tableId = (round * 1000) + game;
                 
                 if (round === 1) {
-                    // 첫 라운드: 실제 팀 배치
-                    const team1Index = (game - 1) * 2;
-                    const team2Index = team1Index + 1;
+                    // 첫 라운드: memberIndex 기반 팀 매칭 (1vs2, 3vs4, 5vs6, 7vs8...)
+                    const team1Index = (game - 1) * 2 + 1;  // 1, 3, 5, 7...
+                    const team2Index = team1Index + 1;      // 2, 4, 6, 8...
                     
-                    const team1 = teams[team1Index] || null;
-                    const team2 = teams[team2Index] || null;
+                    const team1 = teamIndexMap.get(team1Index);
+                    const team2 = teamIndexMap.get(team2Index);
                     
-                    // 부전승 처리: 상대팀이 없거나 상대팀이 부전승인 경우
-                    const isWalkOver = !team2 || team2.isWalkOver;
+                    // 부전승 처리: 상대팀이 없는 경우
+                    const isWalkOver = !team1 || !team2;
                     
                     const team1Member1 = team1?.members[0] || null;
                     const team1Member2 = team1?.members[1] || null;
@@ -437,8 +477,8 @@ export async function createDoubleTournament(req, res) {
                         team1Member2?.uid || null,  // player1_1
                         team2Member1?.uid || null,  // player2_0
                         team2Member2?.uid || null,  // player2_1
-                        isWalkOver ? (team1?.isWalkOver ? null : 0) : 0,  // score1
-                        isWalkOver ? (team2?.isWalkOver ? null : 0) : 0,  // score2
+                        0,  // score1
+                        0,  // score2
                         isWalkOver
                     ]);
                 } else {
@@ -473,7 +513,8 @@ export async function createDoubleTournament(req, res) {
             message: '토너먼트 복식 게임 테이블이 생성되었습니다.',
             teams: teams.length,
             rounds: totalRounds,
-            totalGames: tournamentTables.length
+            totalGames: tournamentTables.length,
+            teamSlots: totalTeamSlots
         });
 
     } catch (error) {

@@ -121,49 +121,103 @@ export async function kickedMember(req, res) {
     try {
         const {uid, roomId} = req.body;
 
+        console.log('🔥 추방 요청:', { uid, roomId }); // 디버깅 로그
+
+        // ✅ 입력 데이터 검증
+        if (!uid || !roomId) {
+            console.log('❌ 필수 데이터 누락:', { uid, roomId });
+            return res.status(400).json({ error: '필수 데이터가 누락되었습니다' });
+        }
+
         await conn.beginTransaction();
 
         //방정보 가져오기
         const [rooms] = await conn.query(`SELECT roomName, local FROM room WHERE roomId = ?;`, [roomId]);
 
         if(rooms.length == 0){
+            console.log('❌ 방을 찾을 수 없음:', roomId);
             await conn.commit();
-            return res.status(404).send();
+            return res.status(404).json({ error: '방을 찾을 수 없습니다' });
         }
 
-        const room = rooms;
+        // ✅ 오타 수정: room[0] → rooms[0]
+        const room = rooms[0];
+        console.log('✅ 방 정보:', room);
+
+        // ✅ 멤버 존재 여부 확인
+        const [existingMember] = await conn.query(
+            `SELECT uid FROM roomMember WHERE roomId = ? AND uid = ?;`, 
+            [roomId, uid]
+        );
+
+        if (existingMember.length === 0) {
+            console.log('❌ 방에 해당 멤버가 없음:', { uid, roomId });
+            await conn.commit();
+            return res.status(404).json({ error: '해당 멤버가 방에 존재하지 않습니다' });
+        }
+
+        // ✅ 이미 블랙리스트에 있는지 확인
+        const [existingBlacklist] = await conn.query(
+            `SELECT uid FROM blackList WHERE roomId = ? AND uid = ?;`, 
+            [roomId, uid]
+        );
 
         //추방하기
-        await conn.query(`DELETE FROM roomMember WHERE roomId = ? AND uid = ?;`, [roomId, uid]);
+        const [deleteResult] = await conn.query(`DELETE FROM roomMember WHERE roomId = ? AND uid = ?;`, [roomId, uid]);
+        console.log('✅ 멤버 삭제 결과:', deleteResult);
 
-        //블랙리스트 등록
-        await conn.query(`INSERT INTO blackList(uid, roomId) VALUES (?,?);`,[uid, roomId]);
+        //블랙리스트 등록 (중복 방지)
+        if (existingBlacklist.length === 0) {
+            await conn.query(`INSERT INTO blackList(uid, roomId) VALUES (?,?);`,[uid, roomId]);
+            console.log('✅ 블랙리스트 등록 완료');
+        } else {
+            console.log('ℹ️ 이미 블랙리스트에 등록됨');
+        }
 
         //방 로그 만들기
         await createLog(roomId, uid, '님이 추방되었습니다');
+        console.log('✅ 로그 생성 완료');
 
         await conn.commit();
+        console.log('✅ 트랜잭션 커밋 완료');
 
         //추방당한 사용자에게 알리기
         const io = getSocket();
-
-
-        const socketId = getSocketIdByUid(uid);
-
-        if (socketId) {
-            io.to(socketId).emit('kicked', {  roomId : roomId ,  room : room });
-            io.to(`roomId:${roomId}`).emit("refreshMember");
-        }else{
-            //푸시 메시지 날리기
-           await createNotification(uid, `채팅방에서 추방되었습니다`, `${room.roomName} 방에 2달간 접근이 불가합니다`, null);
+        
+        // ✅ 소켓 연결 확인
+        if (!io) {
+            console.log('❌ 소켓 서버가 연결되지 않음');
+        } else {
+            console.log('✅ 소켓 서버 연결됨');
         }
 
-        res.send();
+        const socketId = getSocketIdByUid(uid);
+        console.log('🔍 추방 대상 소켓 ID:', socketId);
+        
+        //방 전체에게 멤버 업데이트 요청
+        io.to(`roomId:${roomId}`).emit("refreshMember");
+        console.log('📡 방 전체에게 refreshMember 전송:', `roomId:${roomId}`);
+
+        //현재 접속중인 사용자가있다면 킥 요청
+        //푸시 메시지 날리기
+        await createNotification(uid, `채팅방에서 추방되었습니다`, `${room.roomName} 방에 2달간 접근이 불가합니다`, null);
+        console.log('✅ 푸시 알림 전송 완료');
+        
+        if (socketId != null){
+            console.log('📡 개별 사용자에게 kicked 이벤트 전송:', socketId);
+            io.to(socketId).emit('kicked', { roomId: roomId, room: room });
+        } else {
+            console.log('ℹ️ 추방 대상이 현재 접속하지 않음');
+        }
+
+        console.log('✅ 추방 처리 완료');
+        res.status(200).json({ success: true, message: '추방이 완료되었습니다' });
+        
     } catch (error) {
         await conn.rollback();
-        console.error('추방하기 오류',error);
-        res.status(500).send(); 
-    }finally{
+        console.error('❌ 추방하기 오류:', error);
+        res.status(500).json({ error: '서버 오류가 발생했습니다', details: error.message }); 
+    } finally {
         conn.release();
     }
 }
