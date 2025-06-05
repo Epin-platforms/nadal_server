@@ -25,22 +25,17 @@ export async function updateFCMToken(req, res){
 export async function getNotifications(req, res){
     try {
        const {uid} = req.user;
-       const offset = Number(req.query.offset);
-       const limit = 20;
-
+    
         const q = `
                 SELECT *
                 FROM notification
                 WHERE uid = ?
-                AND createAt >= DATE_SUB(NOW(), INTERVAL 1 MONTH)
+                AND createAt >= DATE_SUB(NOW(), INTERVAL 7 DAY)
                 ORDER BY createAt DESC
-                LIMIT ?
-                OFFSET ?;
        `;
 
-       const [rows] = await pool.query(q, [uid, limit, offset]);
+       const [rows] = await pool.query(q, [uid]);
        res.json(rows);
-
     } catch (error) {
         console.error('알림리스트 쿼리 실패', error);
         res.status(500).send();

@@ -1,31 +1,23 @@
 import express from "express";
-import {createFAQ, createQnA, deleteBanner, deleteQna, getApp, getBanner, getBannerAll, getCommunityBanners, getFaQ, getQnA, getQnAForManage, getReportForManage, insertBanner, reportComplete, reportSave, totalQnaCount, updateAnswer, updateBannerVisible, updateUrl } from "../controllers/appController.js";
+import {getAd, getBanner, getLeagues, reportSave } from "../controllers/appController.js";
+import { createQnA, deleteQna, getFaQ, getQnA } from "../controllers/qna/qnaController.js";
 const router = express.Router();
 
-router.get('/app', getApp);
-router.get('/app/update/url', updateUrl);
-router.get('/communityBanner', getCommunityBanners);
-router.get('/banner', getBanner);
+//위치별 배너 가져오기
+router.get('/banner/:position', getBanner);
 
-router.get('/frequency/all', getFaQ);
-router.get('/questionAndAnswer/:uid', getQnA);
-router.post('/questionAndAnswer/create', createQnA);
+//대회 목록 가져오기
+router.get('/league', getLeagues);
+
+//광고 가져오기
+router.get('/ad', getAd);
+
+//문의하기
+router.get('/qna', getQnA);
+router.get('/faq', getFaQ);
+router.post('/qna/create', createQnA);
+router.delete('/qna/delete', deleteQna);
+
 
 router.post('/report', reportSave);
-
-
-//관리자용
-router.get('/banner/all', getBannerAll);
-router.post('/banner/create', insertBanner);
-router.put('/banner/update/visible', updateBannerVisible);
-router.delete('/banner/delete', deleteBanner);
-
-router.get('/report/all', getReportForManage);
-router.put('/report/complete', reportComplete);
-
-router.get('/question/total', totalQnaCount);
-router.get('/question/all', getQnAForManage);
-router.post('/question/faq/create', createFAQ);
-router.put('/question/answer/update', updateAnswer);
-router.delete('/question/delete', deleteQna);
 export default router;

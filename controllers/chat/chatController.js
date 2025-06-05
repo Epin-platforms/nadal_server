@@ -1,4 +1,5 @@
 import pool from "../../config/database.js";
+import { getSocket } from "../../socket/websocket.js";
 
 
 //전체채팅 불러오기 (초기 로딩)
@@ -65,7 +66,7 @@ export async function getChats(req, res) {
 
                 -- 답글 타입
                 c2.type AS replyType
-
+ 
             FROM chat c
             LEFT JOIN schedule s ON c.type = 2 AND c.scheduleId = s.scheduleId
             LEFT JOIN user u ON c.uid = u.uid
@@ -81,7 +82,7 @@ export async function getChats(req, res) {
             LIMIT 50
         `;
 
-        // 3. 읽은 채팅 (lastRead 이전, 최대 10개)
+        // 3. 읽은 채팅 (lastRead 이전, 최대 20개)
         const readQuery = `
             SELECT
                 c.*,
@@ -138,7 +139,7 @@ export async function getChats(req, res) {
             AND c.createAt > ?
             AND c.chatId <= ?
             ORDER BY c.chatId DESC
-            LIMIT 10
+            LIMIT 20
         `;
 
         const [unreadChats] = await pool.query(unreadQuery, [roomId, regDate, lastRead]);
@@ -243,7 +244,6 @@ export async function getChatsBefore(req, res) {
 
         const [rows] = await pool.query(q, [roomId, regDate, lastChatId]);
         res.json(rows);
-
     } catch (error) {
         console.error('이전 채팅 가져오기 오류', error);
         res.status(500).send();
@@ -468,7 +468,7 @@ export async function reconnectChat(req, res) {
                 -- 답글 작성자 출생연도
                 CASE
                     WHEN r.useNickname = 0 THEN u2.birthYear
-                    ELSE NULL
+                    ELSE NULL 
                 END AS replyBirthYear,
 
                 -- 답글 타입

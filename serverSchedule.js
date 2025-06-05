@@ -7,6 +7,8 @@ const date_sub_chat         = 30;
 const date_sub_notification = 7;
 const date_sub_schedule     = 10;
 const date_sub_roomLog      = 30;
+const date_sub_league = 90;
+
 
 // 예약 작업 ID를 담아두는 배열 (취소용)
 const jobs = [];
@@ -22,6 +24,7 @@ export function initScheduler() {
       await autoDeleteRoomLog(conn);
       await autoDeleteNotification(conn);
       await autoDeleteSchedule(conn);
+      await autoDeleteLeague(conn);
       await conn.commit();
       console.log('삭제 작업 종료:', new Date());
     } catch (e) {
@@ -43,9 +46,9 @@ export function stopScheduler() {
 
 // --- 이하 개별 함수들 ---
 
-async function autoDeleteChat() {
+async function autoDeleteChat(conn) {
   try {
-    const [result] = await pool.query(`
+    const [result] = await conn.query(`
       DELETE FROM chat
       WHERE DATE(createAt) <= DATE_SUB(CURDATE(), INTERVAL ${date_sub_chat} DAY)
     `);
@@ -90,5 +93,17 @@ async function autoDeleteSchedule(conn) {
     console.log(`삭제된 스케줄 수: ${result.affectedRows}`);
   } catch (e) {
     console.error('스케줄 삭제 실패:', e);
+  }
+}
+
+async function autoDeleteLeague(conn) {
+  try {
+    const [result] = await conn.query(`
+      DELETE FROM league
+      WHERE DATE(date) <= DATE_SUB(CURDATE(), INTERVAL ${date_sub_league} DAY)
+    `);
+    console.log(`삭제된 대회 수: ${result.affectedRows}`);
+  } catch (e) {
+    console.error('대회 삭제 실패:', e);
   }
 }

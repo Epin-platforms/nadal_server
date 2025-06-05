@@ -2,75 +2,96 @@ import pool from "../../config/database.js";
 import { createNotification } from "../notification/notificationController.js";
 
 export async function participationSchedule(req, res) {
-    const conn = await pool.getConnection();
+  const conn = await pool.getConnection();
   
-    try {
+  try {
       const { uid } = req.user;
-      const { scheduleId, gender } = req.body;
-  
-      const firstQuery = `
-        SELECT 
-            s.state,
-            s.isKDK,
-            s.isSingle,
-            s.maleLimit,
-            s.femaleLimit,
-            (SELECT COUNT(*) FROM scheduleMember sm INNER JOIN user u ON sm.uid = u.uid WHERE sm.scheduleId = s.scheduleId AND u.gender = 'M') AS maleCount,
-            (SELECT COUNT(*) FROM scheduleMember sm INNER JOIN user u ON sm.uid = u.uid WHERE sm.scheduleId = s.scheduleId AND u.gender = 'F') AS femaleCount,
-            (SELECT COUNT(*) FROM scheduleMember sm WHERE sm.scheduleId = s.scheduleId) AS totalCount
-        FROM schedule s
-        WHERE s.scheduleId = ? AND s.state = 0
-        `;
-
-      const [schedules] = await conn.query(firstQuery, [scheduleId]);
-  
-      if (schedules.length === 0) {
-        return res.status(401).send({ error: '이미 게임이 시작했습니다.' });
-      }
-  
-      const checkResult = schedules[0];
-  
-      // 성별 제한 검사
-      if (gender === 'M' && checkResult.maleLimit != null) {
-        if (checkResult.maleCount >= checkResult.maleLimit) {
-          return res.status(401).send({ error: '남자 인원이 다 찼습니다.' });
-        }
-      }
-      if (gender === 'F' && checkResult.femaleLimit != null) {
-        if (checkResult.femaleCount >= checkResult.femaleLimit) {
-          return res.status(401).send({ error: '여자 인원이 다 찼습니다.' });
-        }
-      }
-  
-      // 총 인원 제한 검사
-      if (checkResult.isKDK == 1) {
-        const maxLimit = checkResult.isSingle == 1 ? 13 : 16;
-        if (checkResult.totalCount >= maxLimit) {
-          return res.status(401).send({ error: '게임 인원이 다 찼습니다.' });
-        }
-      }
-  
-      // 여기서 트랜잭션 시작
+      const { scheduleId } = req.body;
+      
+      // 트랜잭션 시작을 더 일찍
       await conn.beginTransaction();
-  
-      const insertMember = `
-        INSERT INTO scheduleMember (uid, scheduleId)
-        VALUES (?, ?);
+      
+      // 1. 사용자 성별 정보 가져오기 (보안)
+      const [users] = await conn.query('SELECT gender FROM user WHERE uid = ?', [uid]);
+      if (users.length === 0) {
+          return res.status(404).send({ error: '사용자를 찾을 수 없습니다.' });
+      }
+      const userGender = users[0].gender;
+      
+      // 2. 중복 참가 체크
+      const [existing] = await conn.query(
+          'SELECT 1 FROM scheduleMember WHERE uid = ? AND scheduleId = ?', 
+          [uid, scheduleId]
+      );
+      if (existing.length > 0) {
+          return res.status(400).send({ error: '이미 참가한 스케줄입니다.' });
+      }
+      
+      // 3. 스케줄 상태 및 인원 체크 (WHERE 조건 수정)
+      const firstQuery = `
+          SELECT 
+              s.state,
+              s.isKDK,
+              s.isSingle,
+              s.useGenderLimit,
+              s.maleLimit,
+              s.femaleLimit,
+              (SELECT COUNT(*) FROM scheduleMember sm INNER JOIN user u ON sm.uid = u.uid 
+               WHERE sm.scheduleId = s.scheduleId AND u.gender = 'M') AS maleCount,
+              (SELECT COUNT(*) FROM scheduleMember sm INNER JOIN user u ON sm.uid = u.uid 
+               WHERE sm.scheduleId = s.scheduleId AND u.gender = 'F') AS femaleCount,
+              (SELECT COUNT(*) FROM scheduleMember sm WHERE sm.scheduleId = s.scheduleId) AS totalCount
+          FROM schedule s
+          WHERE s.scheduleId = ? AND (s.state = 0 OR s.state IS NULL)
       `;
-  
+      
+      const [schedules] = await conn.query(firstQuery, [scheduleId]);
+      
+      if (schedules.length === 0) {
+          return res.status(401).send({ error: '이미 게임이 시작했거나 존재하지 않는 스케줄입니다.' });
+      }
+      
+      const checkResult = schedules[0];
+      
+      // 4. 성별 제한 검사 (사용자 실제 성별 사용)
+      if (userGender === 'M' && checkResult.useGenderLimit === 1) {
+          if (checkResult.maleCount >= checkResult.maleLimit) {
+              return res.status(400).send({ error: '남자 인원이 다 찼습니다.' });
+          }
+      }
+      if (userGender === 'F' && checkResult.useGenderLimit === 1) {
+          if (checkResult.femaleCount >= checkResult.femaleLimit) {
+              return res.status(400).send({ error: '여자 인원이 다 찼습니다.' });
+          }
+      }
+      
+      // 5. 총 인원 제한 검사
+      if (checkResult.isKDK === 1) {
+          const maxLimit = checkResult.isSingle === 1 ? 13 : 16;
+          if (checkResult.totalCount >= maxLimit) {
+              return res.status(400).send({ error: '게임 인원이 다 찼습니다.' });
+          }
+      }
+      
+      // 6. 참가자 추가
+      const insertMember = `
+          INSERT INTO scheduleMember (uid, scheduleId)
+          VALUES (?, ?);
+      `;
+      
       await conn.query(insertMember, [uid, scheduleId]);
-  
+      
       await conn.commit();
-      res.send();
-  
-    } catch (error) {
+      res.send({ message: '참가가 완료되었습니다.' });
+      
+  } catch (error) {
       console.error('스케줄 참가 오류', error);
       if (conn) await conn.rollback();
-      res.status(500).send();
-    } finally {
+      res.status(500).send({ error: '서버 오류가 발생했습니다.' });
+  } finally {
       if (conn) conn.release();
-    }
   }
+}
   
 
 // 참가 취소 (단독 신청 취소)
@@ -79,7 +100,7 @@ export async function cancelScheduleParticipation(req, res) {
       const { uid } = req.user;
       const { scheduleId } = req.params;
     
-      const [rows] = await pool.query(`SELECT state FROM schedule WHERE scheduleId = ? AND state = 0`, [scheduleId]);
+      const [rows] = await pool.query(`SELECT state FROM schedule WHERE scheduleId = ? AND (state = 0 OR state is NULL)`, [scheduleId]);
 
       if(rows.length == 0){
         return res.status(404).send();
@@ -149,7 +170,7 @@ export async function cancelScheduleParticipation(req, res) {
         const data = target[0];
         await createNotification(otherUid, `${data.title} 일정에 팀으로 참가됐어요`, `${data.roomName}방에서 지금 확인해보세요`, `/schedule/${scheduleId}`);
       }
-      
+
       res.send();
     }catch(error){
       await conn.rollback();

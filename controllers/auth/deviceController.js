@@ -9,6 +9,14 @@ export async function deviceUpdate(req, res) {
         const device = req.body;
         const { uid } = req.user;
         
+        //전에 소켓에 접속중인 사용자가있는지 체크
+        const socketId = getSocketIdByUid(uid);
+
+        if(socketId != null){ //접속중이라면
+            const io = getSocket();
+            io.to(socketId).emit("multipleDevice");
+        }
+        
         // 입력 데이터 검증
         if (!device || !device.deviceHash || !device.deviceName || !device.platform) {
             return res.status(400).json({ 

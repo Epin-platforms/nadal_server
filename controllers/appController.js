@@ -21,21 +21,43 @@ export async function getBanner(req, res) {
 //대회 가져오기
 export async function getLeagues(req, res) {
    try {
-      const lastLeagueId = req.query.lastLeagueId;
+       const lastLeagueId = req.query.lastLeagueId;
+       const searchQuery = req.query.search;
+       
+       let q, params;
+       
+       if (searchQuery) {
+           // 검색어가 있는 경우
+           const searchTerm = `%${searchQuery}%`;
+           q = `
+               SELECT * FROM league 
+               WHERE (? IS NULL OR leagueId < ?)
+               AND (
+                   title LIKE ? OR 
+                   local LIKE ? OR 
+                   location LIKE ? OR 
+                   sports LIKE ?
+               )
+               ORDER BY leagueId DESC 
+               LIMIT 20;
+           `;
+           params = [lastLeagueId, lastLeagueId, searchTerm, searchTerm, searchTerm, searchTerm];
+       } else {
+           // 검색어가 없는 경우 (기존 코드)
+           q = `
+               SELECT * FROM league
+               WHERE (? IS NULL OR leagueId < ?)
+               ORDER BY leagueId DESC
+               LIMIT 20;
+           `;
+           params = [lastLeagueId, lastLeagueId];
+       }
 
-      const q = `
-         SELECT * FROM league
-         WHERE (? IS NULL OR leagueId < ?)
-         ORDER BY leagueId DESC
-         LIMIT 10;
-      `;
-
-      const [rows] = await pool.query(q, [lastLeagueId, lastLeagueId]);
-
-      res.json(rows);
+       const [rows] = await pool.query(q, params);
+       res.json(rows);
    } catch (error) {
-      console.error('리그 가져오기 오류:', error);
-      res.status(500).json({ message: "서버 오류가 발생했습니다." });
+       console.error('리그 가져오기 오류:', error);
+       res.status(500).json({ message: "서버 오류가 발생했습니다." });
    }
 }
 

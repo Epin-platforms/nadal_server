@@ -49,7 +49,6 @@ export function setupWebSocket(server) {
     console.log(`${uid} 유저가 서버에 접속 ${socket.id}`);
 
     
-    
     // 소켓 연결 해제 시 처리
     socket.on('disconnect', () => {
       console.log(`사용자 나감 : ${uid}`);
@@ -194,8 +193,8 @@ export function getUserSocketMap() {
   return userSocketMap;
 }
 
-//한사용자만 불러오기
 export function getSocketIdByUid(uid) {
-  const socketId = userSocketMap[uid]; // 예시
-  return socketId ?? null; // 에러 대신 null 반환
+  // Map에 uid 키가 있으면 socketId를 꺼내고, 없으면 null 반환
+  const socketId = userSocketMap.get(uid) ?? null;
+  return socketId;
 }
