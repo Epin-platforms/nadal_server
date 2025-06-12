@@ -7,50 +7,75 @@ import pool from "../../config/database.js";
 // router.post('/chat', upload.array('images'), saveChat);
 
 export async function saveChat(req, res) {
-    try {
-        const { uid } = req.user;
-        const chat = req.body;  // { roomId, contents, reply, type, ... }
-        chat.uid = uid;
+  try {
+      const { uid } = req.user;
+      const chat = req.body;
+      chat.uid = uid;
 
-        // 1) 이미지 파일들(req.files)이 있으면 순회하며 업로드
-        const imageUrls = [];
+      const imageUrls = [];
 
-        if (Array.isArray(req.files) && req.files.length > 0) {
-            for (const file of req.files) {
-                const fileName = `chat/${chat.roomId}_${uid}_${Date.now()}_${file.originalname}`;
-                const gcsFile = bucket.file(fileName);
+      if (Array.isArray(req.files) && req.files.length > 0) {
+          for (const file of req.files) {
+              let processedBuffer = file.buffer;
+              let contentType = file.mimetype;
 
-                // Google Cloud Storage에 업로드
-                await gcsFile.save(file.buffer, {
-                    metadata: { contentType: file.mimetype },
-                    public: true,
-                    validation: 'md5',
-                });
+              // HEIC/HEIF 또는 iOS 이미지 처리
+              if (file.mimetype.includes('heic') || file.mimetype.includes('heif') || 
+                  file.originalname.toLowerCase().includes('img_')) {
+                  
+                  // Sharp로 색상 프로파일 정규화
+                  const sharp = require('sharp');
+                  try {
+                      processedBuffer = await sharp(file.buffer)
+                          .jpeg({ 
+                              quality: 90,
+                              chromaSubsampling: '4:4:4'
+                          })
+                          // sRGB 색상 프로파일로 강제 변환
+                          .toColorspace('srgb')
+                          .withMetadata({
+                              icc: 'srgb'
+                          })
+                          .toBuffer();
+                      contentType = 'image/jpeg';
+                  } catch (sharpError) {
+                      console.warn('Sharp 처리 실패:', sharpError);
+                  }
+              }
 
-                // 공개 URL 생성
-                const publicUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
-                imageUrls.push(publicUrl);
-            }
-            // 업로드된 URL 배열을 chat 객체에 붙여줍니다
-            chat.images = JSON.stringify(imageUrls);
-        }
+              const fileName = `chat/${chat.roomId}_${uid}_${Date.now()}_${file.originalname}`;
+              const gcsFile = bucket.file(fileName);
 
-        // 2) DB에 chat 삽입
-        const newChat = await updateChat(chat);
+              await gcsFile.save(processedBuffer, {
+                  metadata: { 
+                      contentType: contentType,
+                      cacheControl: 'public, max-age=31536000',
+                      // 색상 프로파일 강제 설정
+                      'color-profile': 'sRGB',
+                      // iOS 호환성 헤더
+                      'x-goog-content-length-range': '0,10485760',
+                  },
+                  public: true,
+                  validation: 'md5',
+              });
 
-        // 3. 알림을 보낼 사용자 목록 가져오기 (✅ newChat 객체 전달)
-        await sendNotificationToRoomMembers(chat.roomId, chat.uid, newChat);
+              const publicUrl = `https://storage.googleapis.com/${bucket.name}/${fileName}`;
+              imageUrls.push(publicUrl);
+          }
+          chat.images = JSON.stringify(imageUrls);
+      }
 
-        // 4) Socket.IO 브로드캐스트
-        const io = getSocket();
-        io.to(`roomId:${newChat.roomId}`).emit('chat', newChat);
+      const newChat = await updateChat(chat);
+      await sendNotificationToRoomMembers(chat.roomId, chat.uid, newChat);
 
-        // 5) 클라이언트 응답
-        res.status(201).json({ success: true });
-    } catch (error) {
-        console.error('saveChat 오류:', error);
-        res.status(500).json({ error: '채팅 저장에 실패했습니다.' });
-    }
+      const io = getSocket();
+      io.to(`roomId:${newChat.roomId}`).emit('chat', newChat);
+
+      res.status(201).json({ success: true });
+  } catch (error) {
+      console.error('saveChat 오류:', error);
+      res.status(500).json({ error: '채팅 저장에 실패했습니다.' });
+  }
 }
 
 // 보낸 채팅

@@ -6,6 +6,7 @@ import { upload } from "../config/multer.js";
 import { autoTextSearchRooms, recommendRooms, searchRooms } from "../controllers/room/searchController.js";
 import {  getPreviewRoom, registerRoom } from "../controllers/room/previewController.js";
 import { getRoomLogs } from "../controllers/room/log/logController.js";
+import { getHotQuickRooms, getMyLocalQuickChat } from "../controllers/room/quickChatController.js";
 
 
 const router = express.Router();
@@ -44,5 +45,7 @@ router.get('/log', getRoomLogs);
 //방제거
 router.delete('/:roomId', deleteRoom);
 
-
+//번개챗 방
+router.get('/my-local-quick', getMyLocalQuickChat);
+router.get('/hot-quick-rooms', getHotQuickRooms);
 export default router;

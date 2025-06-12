@@ -387,7 +387,7 @@ export async function createFriend(req, res) {
 
         const user = userRows[0];
         const title = `${user.nickName}님이 팔로우를 했어요`;
-        const contents = '지금 바로 확인해볼까요?';
+        const contents = '프로필에서 ‘팔로우’ 버튼을 눌러 이 사용자를 친구로 추가하세요.';
         const routing = `/user/${uid}`; // 팔로우한 사람의 프로필로 가야 함
 
         // 6. 알림 생성 (에러가 발생해도 친구 추가는 성공으로 처리)
@@ -563,6 +563,42 @@ export async function getUserWithFid(req, res) {
     }
 }
 
+export async function getFollowerNotFollowing(req, res) {
+    try{
+        const {uid} = req.user;
+        const lastFid = Number(req.query.lastFid);
+
+        //나를 팔로우한 사용자 목록
+        const query = `
+            SELECT 
+                u.nickName,
+                u.profileImage,
+                r.roomName,
+                u.uid,
+                f.fid,
+                u.lastLogin
+            FROM friend f
+            LEFT JOIN user  u ON f.uid        = u.uid
+            LEFT JOIN room  r ON u.affiliationId = r.roomId
+            WHERE 
+                f.friendUid = ?
+            AND NOT EXISTS (
+                -- 내가 f.uid(팔로워) 사람을 팔로우한 기록이 있는지 확인
+                SELECT 1
+                FROM friend f2
+                WHERE 
+                f2.uid        = ?
+                AND f2.friendUid = f.uid
+            );`;
+
+        const [rows] = await pool.query(query, [uid, uid]); 
+        
+        res.json(rows);
+    }catch(error){
+        console.error('나를 팔로우했지만 맞팔로우 되지 않은 친구 목록 오류', error);
+        res.status(500).send();
+    }
+}
 
 //마케팅 수신 정보 업데이트
 export async function updateMarketing(req, res){
@@ -689,36 +725,3 @@ export async function createWallet(req, res) {
     }
 }          
 
-// //이벤트 만들기
-// export async function coinEvnet(params) {
-//     try {
-//         const uid = req.body.uid;
-//         const walletId = req.body.walletId;
-//         const description = req.body.description;
-//         const eventCode = req.body.eventCode;
-
-        
-
-
-//         const transaction_query = `
-        
-//         `
-//         const update = `
-//           UPDATE wallet
-//           total
-//         `
-//     } catch (error) {
-//         console.error("이벤트 지급 실패", error);
-//         res.status(500).send({ error: "event" });
-//     }
-// }
-
-// async function getEventCode(uid, eventCode) {
-//     try {
-//         const q = 
-
-//     } catch (error) {
-//         console.error("이벤트 코드 조회 실패", error);
-//         res.status(500).send({ error: "eventCode" });
-//     }
-// }

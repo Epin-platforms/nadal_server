@@ -13,6 +13,7 @@ export async function getPreviewRoom(req, res){
             r.roomName,
             r.roomImage,
             r.tag,
+            r.isOpen,
             r.description,
             r.local,
             r.city,

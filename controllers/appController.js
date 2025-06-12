@@ -1,6 +1,7 @@
 import pool from '../config/database.js';
 import { admin } from '../config/firebase.js';
 
+const RANKING_BETWEEN_DAYS = 30; //테스트 중일때는 30일 
 
 //배너 불러오기
 export async function getBanner(req, res) {
@@ -88,8 +89,36 @@ export async function getAd(req, res) {
 }
 
 
+export async function getRanking(req, res) {
+   try {
+      //사용자의 포인트가 최근 7일의 성장률이 가장 높은 순서 뽑기
+      const query = `
+         SELECT 
+         u.uid,
+         u.profileImage,
+         u.nickName,
+         r.roomName,
+         SUM(ul.fluctuation) AS totalFluctuation
+         FROM user u
+         -- 최근 7일 기록이 있는 유저만 남기기 위해 JOIN
+         JOIN userLevel ul
+            ON ul.uid = u.uid
+            AND ul.createAt BETWEEN NOW() - INTERVAL ? DAY AND NOW()
+         LEFT JOIN room r 
+            ON u.affiliationId = r.roomId
+         GROUP BY 
+         u.uid, u.profileImage, u.nickName, r.roomName
+         ORDER BY totalFluctuation DESC
+         LIMIT 3;
+      `;
 
-
+      const [rows] = await pool.query(query, [RANKING_BETWEEN_DAYS]);
+      res.json(rows);
+   } catch (error) {
+      console.error('랭킹 획득 실패', error);
+      res.status(500).send();
+   }
+}
 
 
 //신고 목록 확인

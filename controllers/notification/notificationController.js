@@ -43,53 +43,72 @@ export async function getNotifications(req, res){
 }
 
 export async function createNotificationByClient(req, res) {
-    try{
-        const {uid, title, subTitle, routing} = req.body;
+    try {
+        const { uid, title, subTitle, routing } = req.body;
 
         const q = `
             INSERT INTO notification (uid, title, subTitle, routing) 
             VALUES (?, ?, ?, ?);
         `;
 
-        await pool.query(q,  [uid, title, subTitle, routing]);
+        const [result] = await pool.query(q, [uid, title, subTitle, routing]);
+        const notificationId = result.insertId;
 
-        const model = {title: title, subTitle: subTitle, uid: uid, routing: routing};
+        const model = {
+            notificationId: notificationId,
+            title: title, 
+            subTitle: subTitle, 
+            uid: uid, 
+            routing: routing
+        };
 
         await sendNotification(model);
 
         res.send();
-    }catch(error){
+    } catch (error) {
         console.error('알림 만들기 쿼리 실패', error);
         res.status(500).send();
     }
 }
 
-
 export async function createNotification(uid, title, subTitle, routing) {
-    try{
+    try {
         const q = `
             INSERT INTO notification (uid, title, subTitle, routing) 
             VALUES (?, ?, ?, ?);
         `;
 
-        await pool.query(q,  [uid, title, subTitle, routing]);
+        const [result] = await pool.query(q, [uid, title, subTitle, routing]);
+        const notificationId = result.insertId;
 
-        const model = {title: title, subTitle: subTitle, uid: uid, routing: routing};
+        const model = {
+            notificationId: notificationId,
+            title: title, 
+            subTitle: subTitle, 
+            uid: uid, 
+            routing: routing
+        };
 
         await sendNotification(model);
-    }catch(error){
+        
+        return notificationId; // 생성된 알림 ID 반환
+    } catch (error) {
         console.error('알림 만들기 쿼리 실패', error);
+        throw error;
     }
 }
 
-
-
-// FCM 메시지 전송 함수
+// FCM 메시지 전송 함수 (개선)
 async function sendNotification(model) {
     try {
+        if (model.uid == null) {
+            console.error("UID가 없습니다.");
+            return;
+        }
 
-        if(model.uid == null){
-            return
+        if (model.notificationId == null) {
+            console.error("알림 ID가 없습니다.");
+            return;
         }
 
         // FCM 토큰 조회
@@ -106,86 +125,134 @@ async function sendNotification(model) {
         }
 
         const token = rows[0].fcmToken;
+        const collapseKey = "default_collapse_key";
 
-        // Android 및 iOS 알림 그룹화 키
-        const collapseKey =  "default_collapse_key";
+        // 공통 데이터 객체 (notificationId 포함)
+        const commonData = {
+            title: model.title || '',
+            body: model.subTitle || '',
+            routing: model.routing || '',
+            notificationId: model.notificationId.toString(), // 중요: 알림 ID 추가
+            collapseKey: collapseKey,
+        };
 
         let msg;
 
-        // 데이터 온리 FCM 메시지 생성
+        // 사용자 연결 상태 확인
         const connectUserMap = getUserSocketMap();
 
-        if(connectUserMap.has(model.uid)){
+        if (connectUserMap.has(model.uid)) {
+            // 사용자가 온라인인 경우 - 데이터 온리 메시지
             msg = {
-                data: {
-                    title: model.title || '',
-                    body: model.subTitle || '',
-                    routing: model.routing || '',
-                    collapseKey: collapseKey, // 데이터를 통해 그룹화 키 전달
-                },
+                data: commonData,
                 token: token,
             };
-        }else{
+        } else {
+            // 사용자가 오프라인인 경우 - 알림 포함 메시지
             msg = {
-                notification:{
+                notification: {
                     title: model.title || '',
                     body: model.subTitle || '',
                 },
-                data: {
-                    routing: model.routing || '',
-                    collapseKey: collapseKey, // 데이터를 통해 그룹화 키 전달
-                },
+                data: commonData, // 데이터에 notificationId 포함
                 android: {
-                    priority: "high", // 높은 우선 순위
+                    priority: "high",
                     notification: {
-                      title: model.title || '',
-                      body: model.subTitle || '',
-                      channelId: "epin.nadal.chat.channel", // 알림 채널 ID
-                      sound: "default", // 알림 소리,
-                      tag: collapseKey
-                    },
-                  },
-                  apns: {
-                    payload: {
-                      aps: {
+                        title: model.title || '',
+                        body: model.subTitle || '',
+                        channelId: "epin.nadal.chat.channel",
                         sound: "default",
-                      },
+                        tag: collapseKey,
+                        clickAction: "FLUTTER_NOTIFICATION_CLICK", // 클릭 액션 추가
                     },
-                  },
+                    data: {
+                        ...commonData, // Android 전용 데이터에도 포함
+                    }
+                },
+                apns: {
+                    payload: {
+                        aps: {
+                            sound: "default",
+                            category: "NOTIFICATION_CATEGORY", // iOS 카테고리
+                        },
+                        // iOS 커스텀 데이터
+                        notificationId: model.notificationId.toString(),
+                        routing: model.routing || '',
+                    },
+                },
                 token: token,
             };
         }
 
-    
         // FCM 메시지 전송
-        await admin.messaging().send(msg);
-        console.log("데이터 온리 메시지 전송 성공:", msg);
+        const response = await admin.messaging().send(msg);
+        console.log("FCM 메시지 전송 성공:", {
+            notificationId: model.notificationId,
+            uid: model.uid,
+            messageId: response
+        });
+        
+        return response;
     } catch (error) {
+        console.error("FCM 메시지 전송 실패:", {
+            notificationId: model.notificationId,
+            uid: model.uid,
+            error: error.message
+        });
+
         if (error.code === "messaging/invalid-registration-token") {
-            console.error("잘못된 FCM 토큰:", error.message);
+            console.error("잘못된 FCM 토큰 - 토큰 삭제 고려:", error.message);
+            // 토큰 삭제 로직 추가 가능
+            await handleInvalidToken(model.uid);
         } else if (error.code === "messaging/registration-token-not-registered") {
-            console.error("등록되지 않은 FCM 토큰:", error.message);
-        } else {
-            console.error("데이터 온리 메시지 전송 실패:", error);
+            console.error("등록되지 않은 FCM 토큰 - 토큰 삭제 고려:", error.message);
+            // 토큰 삭제 로직 추가 가능
+            await handleInvalidToken(model.uid);
         }
+        
+        throw error;
     }
 }
 
+// 잘못된 토큰 처리 함수
+async function handleInvalidToken(uid) {
+    try {
+        const q = `
+            UPDATE user 
+            SET fcmToken = NULL 
+            WHERE uid = ?;
+        `;
+        await pool.query(q, [uid]);
+        console.log(`잘못된 FCM 토큰 삭제 완료: uid=${uid}`);
+    } catch (error) {
+        console.error("FCM 토큰 삭제 실패:", error);
+    }
+}
 
 export async function readNotification(req, res) {
     try {
-        const {uid} = req.user;
-        const {notificationId} = req.body;
+        const { uid } = req.user;
+        const { notificationId } = req.body;
+
+        // 알림 소유자 검증 및 읽음 처리
         const q = `
             UPDATE notification
             SET readState = 1
-            WHERE notificationId = ? AND uid = ?;
+            WHERE notificationId = ? AND uid = ? AND readState = 0;
         `;
 
-        await pool.query(q, [notificationId, uid]);
+        const [result] = await pool.query(q, [notificationId, uid]);
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({
+                error: "알림을 찾을 수 없거나 이미 읽음 처리된 알림입니다."
+            });
+        }
+
+        console.log(`알림 읽음 처리 완료: notificationId=${notificationId}, uid=${uid}`);
         res.send();
     } catch (error) {
-        console.error(error);
+        console.error("알림 읽음 처리 실패:", error);
         res.status(500).send();
     }
 }

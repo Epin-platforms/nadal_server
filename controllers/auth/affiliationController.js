@@ -18,7 +18,7 @@ export async function getMyRoomsForEditAffiliation(req, res) {
             ) AS memberCount
             FROM room r
             JOIN roomMember rm ON r.roomId = rm.roomId
-            WHERE rm.uid = ?
+            WHERE rm.uid = ? AND r.isOpen = FALSE
             GROUP BY r.roomId, r.tag, r.roomName, r.roomImage, r.createAt;
         `;
 

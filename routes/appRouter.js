@@ -1,5 +1,5 @@
 import express from "express";
-import {getAd, getBanner, getLeagues, reportSave } from "../controllers/appController.js";
+import {getAd, getBanner, getLeagues, getRanking, reportSave } from "../controllers/appController.js";
 import { createQnA, deleteQna, getFaQ, getQnA } from "../controllers/qna/qnaController.js";
 const router = express.Router();
 
@@ -18,6 +18,9 @@ router.get('/faq', getFaQ);
 router.post('/qna/create', createQnA);
 router.delete('/qna/delete', deleteQna);
 
+
+//랭키가져오기
+router.get('/ranking', getRanking);
 
 router.post('/report', reportSave);
 export default router;

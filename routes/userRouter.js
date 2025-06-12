@@ -1,5 +1,5 @@
 import express from "express";
-import { createFriend, createMyTeam, createWallet, deleteFriend, getFriendCheckWithUid, getFriends, getFriendsByPhone, getGameMemory, getProfile, getUserWithFid, getWallet, myTeamWithRoomId, searchWithNumber, updateAffiliation, updateClientProfile, updateDBProfile, updateMarketing } from "../controllers/auth/userController.js";
+import { createFriend, createMyTeam, createWallet, deleteFriend, getFollowerNotFollowing, getFriendCheckWithUid, getFriends, getFriendsByPhone, getGameMemory, getProfile, getUserWithFid, getWallet, myTeamWithRoomId, searchWithNumber, updateAffiliation, updateClientProfile, updateDBProfile, updateMarketing } from "../controllers/auth/userController.js";
 import { login } from "../controllers/auth/loginController.js";
 import { signUp } from "../controllers/auth/signupController.js";
 import { upload } from "../config/multer.js";
@@ -52,6 +52,7 @@ router.get('/friend/:uid', getFriendCheckWithUid);
 router.get('/friends', getFriends);
 router.delete('/friend/:uid', deleteFriend);
 router.post('/friend/:uid', createFriend);
+router.get('/follower-list', getFollowerNotFollowing);
 
 //사용자 검색
 router.post('/friends/find-by-phone', getFriendsByPhone);
@@ -63,10 +64,5 @@ router.get('/add/friend', getUserWithFid);
 //지갑
 router.post('/wallet/get', getWallet);
 router.post('/wallet/create', createWallet);
-
-
-//회원탈퇴
-router.put('/cancel', cancelUser);
-
 
 export default router;

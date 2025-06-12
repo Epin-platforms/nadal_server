@@ -19,8 +19,8 @@ export async function createRoom(req, res) {
   
       // 방 추가
       const q = `
-        INSERT INTO room (roomName, local, city, description, tag, useNickname, enterCode)
-        VALUES (?, ?, ?, ?, ?, ?, ?);
+        INSERT INTO room (roomName, local, city, description, tag, useNickname, enterCode, isOpen)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?);
       `;
       const v = [
         room.roomName,
@@ -29,7 +29,8 @@ export async function createRoom(req, res) {
         room.description,
         room.tag,
         room.useNickname,
-        room.enterCode
+        room.enterCode,
+        room.isOpen
       ];
   
       const [result] = await conn.query(q, v);

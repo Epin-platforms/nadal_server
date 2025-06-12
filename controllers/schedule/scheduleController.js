@@ -252,7 +252,7 @@ export async function getScheduleWithScheduleId(req, res) {
   
       // 스케줄 데이터
       const [scheduleRows] = await pool.query(`
-        SELECT s.*, r.roomName, r.useNickname, ${userSelectFields}, a.account, a.accountName, a.bank
+        SELECT s.*, r.roomName, r.isOpen, r.useNickname, ${userSelectFields}, a.account, a.accountName, a.bank
         FROM schedule s 
         LEFT JOIN user u ON s.uid = u.uid
         LEFT JOIN room r ON s.roomId = r.roomId

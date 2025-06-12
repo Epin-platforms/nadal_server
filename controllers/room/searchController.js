@@ -5,21 +5,22 @@ import pool from '../../config/database.js';
 export async function autoTextSearchRooms(req, res){
     try {
         const { text } = req.query;
-
+        const isOpen = Number(req.query.isOpen) == 1;
+        console.log('들어온 데이터 isOpen = ',isOpen);
         if (!text) {
             return res.status(400).send('Query parameter is required');
-          }
+        }
 
           const search = `%${text}%`;
 
           const q = `
             SELECT roomName, tag, description
             FROM room
-            WHERE roomName LIKE ? OR tag LIKE ? OR description LIKE ?
+            WHERE isOpen = ? AND (roomName LIKE ? OR tag LIKE ? OR description LIKE ?)
             LIMIT 13;
           `;
           
-          const [rows] = await pool.query(q, [search, search, search]);
+          const [rows] = await pool.query(q, [isOpen, search, search, search]);
           
           const result = rows.map(row => ({
             roomName: row.roomName,
@@ -62,6 +63,7 @@ function extractContext(keyword, text, type = 'default') {
 export async function recommendRooms(req, res) {
     try {
         const {local} = req.query;
+        const isOpen = Number(req.query.isOpen) == 1;
         const {uid} = req.user;
 
         const q = `
@@ -73,7 +75,7 @@ export async function recommendRooms(req, res) {
             LEFT JOIN roomMember rm ON rm.roomId = r.roomId
             WHERE 
                 r.local = ?
-                AND r.isOpen = 1
+                AND r.isOpen = ?
                 AND NOT EXISTS (
                 SELECT 1 FROM roomMember rm2
                 WHERE rm2.roomId = r.roomId AND rm2.uid = ?
@@ -87,7 +89,7 @@ export async function recommendRooms(req, res) {
             LIMIT 5;
             `;
 
-        const [rows] = await pool.query(q, [local, uid, uid]);
+        const [rows] = await pool.query(q, [local, isOpen, uid, uid]);
         res.json(rows);
     } catch (error) {
         console.error(error);
@@ -102,6 +104,7 @@ export async function searchRooms(req, res) {
     try {
       const { uid } = req.user;
       const text = req.query.text;
+      const isOpen = Number(req.query.isOpen) == 1;
       const offset = Number(req.query.offset) || 0;
   
       if (!text) {
@@ -119,10 +122,11 @@ export async function searchRooms(req, res) {
           COUNT(rm2.roomId) AS memberCount
         FROM room r
         LEFT JOIN roomMember rm ON r.roomId = rm.roomId AND rm.uid = ?
-
         LEFT JOIN roomMember rm2 ON r.roomId = rm2.roomId
         WHERE 
           rm.uid IS NULL
+          AND
+            r.isOpen = ?
           AND (
             r.roomName LIKE CONCAT('%', ?, '%') OR
             r.description LIKE CONCAT('%', ?, '%') OR
@@ -133,7 +137,7 @@ export async function searchRooms(req, res) {
         LIMIT 10 OFFSET ?;
       `;
   
-      const [rows] = await pool.query(q, [uid, text, text, text, offset]);
+      const [rows] = await pool.query(q, [uid, isOpen, text, text, text, offset]);
       res.json(rows);
     } catch (error) {
       console.error('방 찾기 쿼리 오류:', error);
