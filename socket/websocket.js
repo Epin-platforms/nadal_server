@@ -102,7 +102,7 @@ export function setupWebSocket(server) {
         const roomChannel = `roomId:${roomId}`;
         socket.join(roomChannel);
         userRoomCount.set(uid, userJoinedRooms + 1);
-        
+        console.log(`${roomChannel}방에 ${uid} 사용자가 접속했습니다`);
         
         // 4) 클라이언트에 전송 (이벤트 이름: 'joinedRoom')
         socket.emit('joinedRoom');

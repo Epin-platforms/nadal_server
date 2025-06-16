@@ -1,147 +1,254 @@
 import pool from '../../config/database.js';
 
+// 입력 검증 및 정제 함수
+function sanitizeSearchText(text) {
+    if (!text || typeof text !== 'string') return '';
+    
+    // 특수문자 이스케이프 및 길이 제한
+    return text
+        .trim()
+        .substring(0, 100) // 최대 100자 제한
+        .replace(/[%_\\]/g, '\\$&'); // LIKE 쿼리 특수문자 이스케이프
+}
 
-//자동 완성 방 검색
-export async function autoTextSearchRooms(req, res){
+// 자동 완성 방 검색
+export async function autoTextSearchRooms(req, res) {
+    const connection = await pool.getConnection();
     try {
-        const { text } = req.query;
-        const isOpen = Number(req.query.isOpen) == 1;
-        console.log('들어온 데이터 isOpen = ',isOpen);
-        if (!text) {
-            return res.status(400).send('Query parameter is required');
+        const rawText = req.query.text;
+        const isOpen = Number(req.query.isOpen) === 1;
+        
+        // 입력 검증
+        if (!rawText || rawText.length < 1) {
+            return res.status(400).json({ error: 'Query parameter is required' });
         }
-
-          const search = `%${text}%`;
-
-          const q = `
+        
+        const text = sanitizeSearchText(rawText);
+        if (!text) {
+            return res.status(400).json({ error: 'Invalid search text' });
+        }
+        
+        await connection.beginTransaction();
+        
+        const searchPattern = `%${text}%`;
+        
+        const q = `
             SELECT roomName, tag, description
             FROM room
-            WHERE isOpen = ? AND (roomName LIKE ? OR tag LIKE ? OR description LIKE ?)
-            LIMIT 13;
-          `;
-          
-          const [rows] = await pool.query(q, [isOpen, search, search, search]);
-          
-          const result = rows.map(row => ({
-            roomName: row.roomName,
-            tagSnippet: extractContext(text, row.tag, 'tag'),               // ex. ['#축구']
-            descriptionSnippet: extractContext(text, row.description, 'description'), // ex. '...무슨태그가 필요...'
-          }));
-
-
-          res.json(result);
+            WHERE isOpen = ? 
+            AND (
+                roomName LIKE ? OR 
+                tag LIKE ? OR 
+                description LIKE ?
+            )
+            ORDER BY 
+                CASE 
+                    WHEN roomName LIKE ? THEN 1
+                    WHEN tag LIKE ? THEN 2
+                    ELSE 3
+                END,
+                LENGTH(roomName) ASC
+            LIMIT 13
+        `;
+        
+        const params = [
+            isOpen, 
+            searchPattern, searchPattern, searchPattern,
+            searchPattern, searchPattern
+        ];
+        
+        const [rows] = await connection.query(q, params);
+        
+        const result = rows.map(row => ({
+            roomName: row.roomName || '',
+            tagSnippet: extractContext(text, row.tag, 'tag'),
+            descriptionSnippet: extractContext(text, row.description, 'description'),
+        })).filter(item => 
+            item.roomName || 
+            (item.tagSnippet && item.tagSnippet.length > 0) || 
+            item.descriptionSnippet
+        );
+        
+        await connection.commit();
+        res.json(result);
+        
     } catch (error) {
-        console.error('자동 완성 쿼리오류:', error);
-        return res.status(500).send();
+        await connection.rollback();
+        console.error('자동 완성 쿼리 오류:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    } finally {
+        connection.release();
     }
 }
 
-//요약 텍스트로변경
+// 안전한 컨텍스트 추출 함수
 function extractContext(keyword, text, type = 'default') {
-    if (!text || !keyword) return null;
-  
-    if (type === 'tag') {
-      // '#' 단위로 split
-      return text
-        .split('#')
-        .map(t => t.trim())
-        .filter(t => t && t.includes(keyword))
-        .map(t => `#${t}`);
+    if (!text || !keyword || typeof text !== 'string' || typeof keyword !== 'string') {
+        return type === 'tag' ? [] : null;
     }
-  
-    if (type === 'description') {
-      const regex = new RegExp(`(.{0,20}${keyword}.{0,20})`, 'i'); // 전후 20자
-      const match = text.match(regex);
-      return match ? match[1].trim() : null;
-    }
-  
-    return null;
-  }
-  
-
-//추천 방 시스템
-export async function recommendRooms(req, res) {
+    
     try {
-        const {local} = req.query;
-        const isOpen = Number(req.query.isOpen) == 1;
-        const {uid} = req.user;
+        const safeKeyword = keyword.toLowerCase();
+        const safeText = text.toLowerCase();
+        
+        if (type === 'tag') {
+            if (!safeText.includes('#')) {
+                return safeText.includes(safeKeyword) ? [text] : [];
+            }
+            
+            return text
+                .split('#')
+                .map(t => t.trim())
+                .filter(t => t && t.toLowerCase().includes(safeKeyword))
+                .map(t => `#${t}`)
+                .slice(0, 5); // 최대 5개 제한
+        }
+        
+        if (type === 'description') {
+            const keywordIndex = safeText.indexOf(safeKeyword);
+            if (keywordIndex === -1) return null;
+            
+            const start = Math.max(0, keywordIndex - 20);
+            const end = Math.min(text.length, keywordIndex + safeKeyword.length + 20);
+            
+            let result = text.substring(start, end).trim();
+            if (start > 0) result = '...' + result;
+            if (end < text.length) result = result + '...';
+            
+            return result;
+        }
+        
+        return null;
+    } catch (error) {
+        console.error('Context extraction error:', error);
+        return type === 'tag' ? [] : null;
+    }
+}
 
+// 추천 방 시스템
+export async function recommendRooms(req, res) {
+    const connection = await pool.getConnection();
+    try {
+        const { local } = req.query;
+        const isOpen = Number(req.query.isOpen) === 1;
+        const { uid } = req.user;
+        
+        // 입력 검증
+        if (!local || typeof local !== 'string') {
+            return res.status(400).json({ error: 'Local parameter is required' });
+        }
+        
+        await connection.beginTransaction();
+        
         const q = `
             SELECT 
-                r.roomName, r.roomImage, r.tag, r.local,
+                r.roomId,
+                r.roomName, 
+                r.roomImage, 
+                r.tag, 
+                r.local,
                 COUNT(rm.uid) AS memberCount
-            FROM 
-                room r
+            FROM room r
             LEFT JOIN roomMember rm ON rm.roomId = r.roomId
-            WHERE 
-                r.local = ?
+            WHERE r.local = ?
                 AND r.isOpen = ?
                 AND NOT EXISTS (
-                SELECT 1 FROM roomMember rm2
-                WHERE rm2.roomId = r.roomId AND rm2.uid = ?
+                    SELECT 1 FROM roomMember rm2
+                    WHERE rm2.roomId = r.roomId AND rm2.uid = ?
                 )
                 AND NOT EXISTS (
-                SELECT 1 FROM blackList b
-                WHERE b.roomId = r.roomId AND b.uid = ?
+                    SELECT 1 FROM blackList b
+                    WHERE b.roomId = r.roomId AND b.uid = ?
                 )
-            GROUP BY r.roomId 
+            GROUP BY r.roomId, r.roomName, r.roomImage, r.tag, r.local
             ORDER BY RAND()
-            LIMIT 5;
-            `;
-
-        const [rows] = await pool.query(q, [local, isOpen, uid, uid]);
+            LIMIT 5
+        `;
+        
+        const [rows] = await connection.query(q, [local, isOpen, uid, uid]);
+        
+        await connection.commit();
         res.json(rows);
+        
     } catch (error) {
-        console.error(error);
-        res.status(500).send();
+        await connection.rollback();
+        console.error('추천 방 쿼리 오류:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    } finally {
+        connection.release();
     }
 }
 
-
-
-//방 찾기
+// 방 찾기
 export async function searchRooms(req, res) {
+    const connection = await pool.getConnection();
     try {
-      const { uid } = req.user;
-      const text = req.query.text;
-      const isOpen = Number(req.query.isOpen) == 1;
-      const offset = Number(req.query.offset) || 0;
-  
-      if (!text) {
-        return res.status(400).send('Search text parameter is required');
-      }
-  
-      const q = `
-        SELECT 
-          r.roomId,
-          r.roomName,
-          r.roomImage,
-          r.tag,
-          r.description,
-          r.local,
-          COUNT(rm2.roomId) AS memberCount
-        FROM room r
-        LEFT JOIN roomMember rm ON r.roomId = rm.roomId AND rm.uid = ?
-        LEFT JOIN roomMember rm2 ON r.roomId = rm2.roomId
-        WHERE 
-          rm.uid IS NULL
-          AND
-            r.isOpen = ?
-          AND (
-            r.roomName LIKE CONCAT('%', ?, '%') OR
-            r.description LIKE CONCAT('%', ?, '%') OR
-            r.tag LIKE CONCAT('%', ?, '%')
-          )
-        GROUP BY r.roomId
-        ORDER BY r.createAt DESC
-        LIMIT 10 OFFSET ?;
-      `;
-  
-      const [rows] = await pool.query(q, [uid, isOpen, text, text, text, offset]);
-      res.json(rows);
+        const { uid } = req.user;
+        const rawText = req.query.text;
+        const isOpen = Number(req.query.isOpen) === 1;
+        const offset = Math.max(0, Number(req.query.offset) || 0);
+        
+        // 입력 검증
+        if (!rawText || typeof rawText !== 'string') {
+            return res.status(400).json({ error: 'Search text parameter is required' });
+        }
+        
+        const text = sanitizeSearchText(rawText);
+        if (!text) {
+            return res.status(400).json({ error: 'Invalid search text' });
+        }
+        
+        await connection.beginTransaction();
+        
+        const searchPattern = `%${text}%`;
+        
+        const q = `
+            SELECT 
+                r.roomId,
+                r.roomName,
+                r.roomImage,
+                r.tag,
+                r.description,
+                r.local,
+                COUNT(rm2.roomId) AS memberCount
+            FROM room r
+            LEFT JOIN roomMember rm ON r.roomId = rm.roomId AND rm.uid = ?
+            LEFT JOIN roomMember rm2 ON r.roomId = rm2.roomId
+            WHERE rm.uid IS NULL
+                AND r.isOpen = ?
+                AND (
+                    r.roomName LIKE ? OR
+                    r.description LIKE ? OR
+                    r.tag LIKE ?
+                )
+            GROUP BY r.roomId, r.roomName, r.roomImage, r.tag, r.description, r.local
+            ORDER BY 
+                CASE 
+                    WHEN r.roomName LIKE ? THEN 1
+                    WHEN r.tag LIKE ? THEN 2
+                    ELSE 3
+                END,
+                r.createAt DESC
+            LIMIT 10 OFFSET ?
+        `;
+        
+        const params = [
+            uid, isOpen, 
+            searchPattern, searchPattern, searchPattern,
+            searchPattern, searchPattern,
+            offset
+        ];
+        
+        const [rows] = await connection.query(q, params);
+        
+        await connection.commit();
+        res.json(rows);
+        
     } catch (error) {
-      console.error('방 찾기 쿼리 오류:', error);
-      res.status(500).send();
+        await connection.rollback();
+        console.error('방 찾기 쿼리 오류:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    } finally {
+        connection.release();
     }
-} 
-
+}

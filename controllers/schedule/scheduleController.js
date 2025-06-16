@@ -285,49 +285,60 @@ export async function getScheduleWithScheduleId(req, res) {
   }
   
 
-  ///스케줄 업데이트
-  export async function updateSchedule(req, res) {
-    try {
-      const { uid } = req.user;
-      const { scheduleId, ...fields } = req.body;
-  
-      if (!scheduleId) {
-        return res.status(400).send("Missing scheduleId");
-      }
-  
-      // ⚠️ 주의 변경일 때: 참여자 있는지 검사
-        const [members] = await pool.query(
-          `SELECT uid FROM scheduleMember WHERE scheduleId = ?`,
-          [scheduleId]
-        );
-  
-        if (members.length > 0) {
-          return res.status(409).send({ error: "참가자가 있는 상태에서 변경할 수 없는 내용이 있습니다" });
-        }
-    
-  
-      const keys = Object.keys(fields);
-      if (keys.length === 0) {
-        return res.status(400).send("No fields to update");
-      }
-  
-      const setClause = keys.map(k => `${k} = ?`).join(', ');
-      const values = keys.map(k => fields[k]);
-  
-      const q = `
-        UPDATE schedule
-        SET ${setClause}
-        WHERE uid = ? AND scheduleId = ?
-      `;
-      values.push(uid, scheduleId);
-  
-      await pool.query(q, values);
-      res.send(); // 200 OK
-    } catch (error) {
-      console.error(error);
-      res.status(500).send("Server error");
+// 스케줄 업데이트
+export async function updateSchedule(req, res) {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const { uid }      = req.user;
+    const { scheduleId, ...fields } = req.body;
+
+    if (!scheduleId) {
+      return res.status(400).send("Missing scheduleId");
     }
+
+    const keys = Object.keys(fields);
+    if (keys.length === 0) {
+      return res.status(400).send("No fields to update");
+    }
+
+    // ⚠️ 참가자가 있는 상태에선 구조 변경 금지 (isSingle / isKDK)
+    if (keys.includes('isSingle') || keys.includes('isKDK')) {
+      const [members] = await conn.query(
+        `SELECT uid FROM scheduleMember WHERE scheduleId = ?`,
+        [scheduleId]
+      );
+      if (members.length > 0) {
+        return res
+          .status(409)
+          .json({ error: "참가자가 있는 상태에서는 변경할 수 없는 항목이 포함되어 있습니다." });
+      }
+    }
+
+    // 동적 SET 절 생성
+    const setClause = keys.map(k => `\`${k}\` = ?`).join(', ');
+    const values    = keys.map(k => fields[k]);
+
+    // 실제 업데이트
+    const q = `
+      UPDATE schedule
+      SET ${setClause}
+      WHERE uid = ? AND scheduleId = ?
+    `;
+    await conn.query(q, [...values, uid, scheduleId]);
+
+    await conn.commit();
+    res.send(); // 200 OK
+  } catch (err) {
+    await conn.rollback();
+    console.error("updateSchedule error:", err);
+    res.status(500).send("Server error");
+  } finally {
+    conn.release();
   }
+}
+
   
 
 //스케줄 삭제

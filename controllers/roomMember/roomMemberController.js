@@ -222,44 +222,75 @@ export async function kickedMember(req, res) {
     }
 }
 
-//방 멤버 등급 설정
-export async function changedMemberGrade(req, res){
+// 방 멤버 등급 설정 (트랜잭션 적용)
+export async function changedMemberGrade(req, res) {
+    const { uid } = req.user;
+    const { targetUid, roomId, grade } = req.body;
+    const conn = await pool.getConnection();
+  
     try {
-        const {uid} = req.user;
-        const {targetUid, roomId, grade} = req.body;
-
-        const q = `
-            UPDATE roomMember
-            SET grade = ?
-            WHERE roomId = ? AND uid = ?;
+      await conn.beginTransaction();
+  
+      // 1) 대상 멤버 등급 변경
+      const q1 = `
+        UPDATE roomMember
+        SET grade = ?
+        WHERE roomId = ? AND uid = ?;
+      `;
+      await conn.query(q1, [grade, roomId, targetUid]);
+  
+      // 2) 만약 새 클럽장(grade === 0)이라면, 기존 내 등급을 매니저(1)로 하향
+      if (grade === 0) {
+        const q2 = `
+          UPDATE roomMember
+          SET grade = 1
+          WHERE roomId = ? AND uid = ?;
         `;
-
-        //타겟에 uid 변경
-        await pool.query(q, [grade, roomId, targetUid]);
-
-        const io = getSocket();
-        io.to(`roomId:${roomId}`).emit('gradeChanged', {roomId: roomId, uid: targetUid, grade: grade});
-
-        await createNotification(targetUid, '멤버 등급이 변경되었어요', '지금 바로 확인해보세요', `/room/${roomId}`);
-
-        if(grade == 0){ //클럽장으로 변경이라면 //본인은 매니저로 변경
-            const q = `
-                UPDATE roomMember
-                SET grade = 1
-                WHERE roomId = ? AND uid = ?;
-            `;  
-
-            await pool.query(q, [roomId, uid]);
-            io.to(`roomId:${roomId}`).emit('gradeChanged', {roomId: roomId, uid: uid, grade: 1});
-        }
-
-          //로그만들기
-        const gradeStr = grade == 0 ? '클럽장' : grade == 1 ? '매니저' : grade == 2 ? '정회원' : '신입';
-        await createLog(roomId, targetUid, `님께서 ${gradeStr}등급이 되었습니다`);
-
-        res.send();
+        await conn.query(q2, [roomId, uid]);
+      }
+  
+      // 3) 로그 기록 (roomLog 테이블에 삽입하는 예시)
+      const gradeStr = grade === 0
+        ? '클럽장'
+        : grade === 1
+          ? '매니저'
+          : grade === 2
+            ? '정회원'
+            : '신입';
+      const logQuery = `
+        INSERT INTO roomLog (roomId, uid, message)
+        VALUES (?, ?, ?);
+      `;
+      await conn.query(logQuery, [roomId, targetUid, `${gradeStr} 등급으로 변경되었습니다.`]);
+  
+      await conn.commit();
+  
+      // — 이 시점부터는 DB 트랜잭션이 성공적으로 커밋된 이후 작업 —
+  
+      // 4) 방 안 전체에 소켓 이벤트
+      const io = getSocket();
+      io.to(`roomId:${roomId}`).emit('gradeChanged', { roomId, uid: targetUid, grade });
+  
+      if (grade === 0) {
+        // 본인(구 클럽장)을 매니저로 변경한 이벤트도 발송
+        io.to(`roomId:${roomId}`).emit('gradeChanged', { roomId, uid, grade: 1 });
+      }
+  
+      // 5) 대상에게 푸시 알림 생성
+      await createNotification(
+        targetUid,
+        '멤버 등급이 변경되었어요',
+        '지금 바로 확인해보세요',
+        `/room/${roomId}`
+      );
+  
+      res.send();
     } catch (error) {
-        console.error('등급 변경 오류',error);
-        res.status(500).send(); 
+      await conn.rollback();
+      console.error('등급 변경 오류:', error);
+      res.status(500).send();
+    } finally {
+      conn.release();
     }
-}
+  }
+  
