@@ -10,7 +10,7 @@ import { getHotQuickRooms, getMyLocalQuickChat } from "../controllers/room/quick
 
 const router = express.Router();
 
-// 입력 검증 미들웨어
+// 단순화된 입력 검증 미들웨어
 const validateSearchQuery = (req, res, next) => {
     const { text } = req.query;
     
@@ -23,18 +23,13 @@ const validateSearchQuery = (req, res, next) => {
         return res.status(400).json({ error: 'Search text must be between 1 and 100 characters' });
     }
     
-    // SQL 인젝션 방지를 위한 기본 패턴 체크
-    const dangerousPatterns = [
-        /--/,           // SQL 주석
-        /\/\*/,         // SQL 블록 주석  
-        /;.*drop/i,     // DROP 명령어
-        /;.*delete/i,   // DELETE 명령어
-        /;.*update/i,   // UPDATE 명령어
-        /;.*insert/i,   // INSERT 명령어
-        /union.*select/i, // UNION SELECT
+    // 매우 기본적인 위험 패턴만 체크 (너무 엄격하지 않게)
+    const criticalPatterns = [
+        /<script/i,     // 스크립트 태그만
+        /javascript:/i, // 자바스크립트 프로토콜만
     ];
     
-    for (const pattern of dangerousPatterns) {
+    for (const pattern of criticalPatterns) {
         if (pattern.test(trimmedText)) {
             return res.status(400).json({ error: 'Invalid characters in search text' });
         }
@@ -76,7 +71,7 @@ router.get('/reGet/:roomId', handleAsyncError(getRoomByRoomId));
 router.put('/update', upload.single('roomImage'), handleAsyncError(updateDBRoom));
 router.get('/lastAnnounce', handleAsyncError(getLastAnnounceWithRoomId));
 
-//방검색 기능 - 검증 미들웨어 적용
+//방검색 기능 - 단순화된 검증 미들웨어 적용
 router.get('/recommend', handleAsyncError(recommendRooms));
 router.get('/autoText', validateSearchQuery, handleAsyncError(autoTextSearchRooms));
 router.get('/search', validateSearchQuery, validateOffset, handleAsyncError(searchRooms));

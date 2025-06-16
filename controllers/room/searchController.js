@@ -1,14 +1,14 @@
 import pool from '../../config/database.js';
 
-// 입력 검증 및 정제 함수
+// 입력 검증 및 정제 함수 (단순화)
 function sanitizeSearchText(text) {
     if (!text || typeof text !== 'string') return '';
     
-    // 특수문자 이스케이프 및 길이 제한
+    // 특수문자 이스케이프 및 길이 제한 (LIKE 쿼리용 특수문자만)
     return text
         .trim()
         .substring(0, 100) // 최대 100자 제한
-        .replace(/[%_\\]/g, '\\$&'); // LIKE 쿼리 특수문자 이스케이프
+        .replace(/[%_\\]/g, '\\$&'); // LIKE 쿼리 특수문자만 이스케이프
 }
 
 // 자동 완성 방 검색
@@ -17,6 +17,8 @@ export async function autoTextSearchRooms(req, res) {
     try {
         const rawText = req.query.text;
         const isOpen = Number(req.query.isOpen) === 1;
+        
+        console.log('자동완성 검색 요청:', { rawText, isOpen });
         
         // 입력 검증
         if (!rawText || rawText.length < 1) {
@@ -27,6 +29,8 @@ export async function autoTextSearchRooms(req, res) {
         if (!text) {
             return res.status(400).json({ error: 'Invalid search text' });
         }
+        
+        console.log('정제된 검색어:', text);
         
         await connection.beginTransaction();
         
@@ -58,6 +62,8 @@ export async function autoTextSearchRooms(req, res) {
         ];
         
         const [rows] = await connection.query(q, params);
+        
+        console.log('자동완성 결과 개수:', rows.length);
         
         const result = rows.map(row => ({
             roomName: row.roomName || '',
@@ -188,6 +194,8 @@ export async function searchRooms(req, res) {
         const isOpen = Number(req.query.isOpen) === 1;
         const offset = Math.max(0, Number(req.query.offset) || 0);
         
+        console.log('방 검색 요청:', { rawText, isOpen, offset, uid });
+        
         // 입력 검증
         if (!rawText || typeof rawText !== 'string') {
             return res.status(400).json({ error: 'Search text parameter is required' });
@@ -197,6 +205,8 @@ export async function searchRooms(req, res) {
         if (!text) {
             return res.status(400).json({ error: 'Invalid search text' });
         }
+        
+        console.log('정제된 검색어:', text);
         
         await connection.beginTransaction();
         
@@ -239,7 +249,10 @@ export async function searchRooms(req, res) {
             offset
         ];
         
+        console.log('SQL 쿼리 실행 중...');
         const [rows] = await connection.query(q, params);
+        
+        console.log('검색 결과:', rows.length, '개');
         
         await connection.commit();
         res.json(rows);
