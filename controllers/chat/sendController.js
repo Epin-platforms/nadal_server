@@ -102,7 +102,6 @@ async function updateChat(data) {
     }
 }
 
-// 🔥 수정된 알림 함수 (빈 알림 제거)
 async function sendNotificationToRoomMembers(roomId, senderUid, chat) {
     try {
         // 방 참가자의 FCM 토큰 가져오기
@@ -137,11 +136,7 @@ async function sendNotificationToRoomMembers(roomId, senderUid, chat) {
 
         console.log(`알림 대상 사용자: ${rows.length}명`);
 
-        // 🔥 핵심 수정: 연결되지 않은 사용자에게만 FCM 전송
-        const disconnectedUsers = rows.filter(user => !getSocketIdByUid(user.uid));
-
-        console.log(`실제 FCM 전송 대상: ${disconnectedUsers.length}명 (연결안됨)`);
-
+    
         // 메시지 내용 결정 (안전한 처리)
         const getMessageBody = (chat) => {
             if (!chat) return '새 메시지';
@@ -151,7 +146,7 @@ async function sendNotificationToRoomMembers(roomId, senderUid, chat) {
         };
 
         // 🚀 연결되지 않은 사용자에게만 FCM 푸시 알림 전송
-        const notificationPromises = disconnectedUsers.map(async (user) => {
+        const notificationPromises = rows.map(async (user) => {
             if (!user.fcmToken) {
                 console.warn(`FCM 토큰이 없는 사용자: ${user.uid}`);
                 return;
