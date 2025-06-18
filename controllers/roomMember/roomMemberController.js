@@ -237,6 +237,7 @@ export async function changedMemberGrade(req, res) {
         SET grade = ?
         WHERE roomId = ? AND uid = ?;
       `;
+
       await conn.query(q1, [grade, roomId, targetUid]);
   
       // 2) 만약 새 클럽장(grade === 0)이라면, 기존 내 등급을 매니저(1)로 하향
@@ -257,10 +258,12 @@ export async function changedMemberGrade(req, res) {
           : grade === 2
             ? '정회원'
             : '신입';
+
       const logQuery = `
-        INSERT INTO roomLog (roomId, uid, message)
+        INSERT INTO roomLog (roomId, uid, action)
         VALUES (?, ?, ?);
       `;
+
       await conn.query(logQuery, [roomId, targetUid, `${gradeStr} 등급으로 변경되었습니다.`]);
   
       await conn.commit();

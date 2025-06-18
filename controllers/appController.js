@@ -100,7 +100,7 @@ export async function getRanking(req, res) {
          r.roomName,
          SUM(ul.fluctuation) AS totalFluctuation
          FROM user u
-         -- 최근 7일 기록이 있는 유저만 남기기 위해 JOIN
+         -- 최근 기록이 있는 유저만 남기기 위해 JOIN
          JOIN userLevel ul
             ON ul.uid = u.uid
             AND ul.createAt BETWEEN NOW() - INTERVAL ? DAY AND NOW()

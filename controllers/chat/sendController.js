@@ -1,6 +1,6 @@
 // controllers/chat/sendController.js
 import { bucket } from "../../config/firebase.js";
-import { getSocket, getSocketIdByUid } from "../../socket/websocket.js";
+import { getSocket, getUserSocketMap } from "../../socket/websocket.js";
 import { admin } from "../../config/firebase.js";
 import pool from "../../config/database.js";
 
@@ -102,9 +102,10 @@ async function updateChat(data) {
     }
 }
 
+// 🔧 수정된 FCM 알림 전송 함수
 async function sendNotificationToRoomMembers(roomId, senderUid, chat) {
     try {
-        // 방 참가자의 FCM 토큰 가져오기
+        // 방 참가자 정보 조회
         const q = `
             SELECT 
                 u.fcmToken, 
@@ -126,81 +127,177 @@ async function sendNotificationToRoomMembers(roomId, senderUid, chat) {
               AND u.fcmToken IS NOT NULL
               AND rm.alarm = 1
         `;
-
-        const [rows] = await pool.query(q, [roomId, senderUid]);
         
+        const [rows] = await pool.query(q, [roomId, senderUid]);
         if (rows.length === 0) {
-            console.log("알림을 보낼 대상이 없습니다.");
+            console.log(`📭 알림 수신자 없음 (roomId: ${roomId})`);
             return;
         }
 
-        console.log(`알림 대상 사용자: ${rows.length}명`);
-
-    
-        // 메시지 내용 결정 (안전한 처리)
+        // 현재 소켓에 접속된 사용자 맵
+        const connected = getUserSocketMap();
+        
+        // collapseKey 생성: 방 단위로 알림 그룹화
+        const collapseKey = `room_${roomId}`;
+        
+        // 메시지 본문 결정
         const getMessageBody = (chat) => {
-            if (!chat) return '새 메시지';
-            if (chat.type === 1) return '(사진)';
-            if (chat.type === 2) return '(일정)';
-            return chat.contents || '새 메시지';
+            if (chat.type === 1) return "(사진)";
+            if (chat.type === 2) return "(일정)";
+            return chat.contents || "새 메시지";
         };
 
-        // 🚀 연결되지 않은 사용자에게만 FCM 푸시 알림 전송
-        const notificationPromises = rows.map(async (user) => {
-            if (!user.fcmToken) {
-                console.warn(`FCM 토큰이 없는 사용자: ${user.uid}`);
-                return;
-            }
-
+        // 병렬 처리로 성능 최적화
+        const sendPromises = rows.map(async (user) => {
+            const isOnline = connected.has(user.uid);
             const messageBody = getMessageBody(chat);
+            const title = `${user.roomName}에서의 메시지`;
+
+            let msg;
             
-            // 🔥 수정: 중복 알림 방지 - data만 사용
-            const message = {
+            // 🔧 모든 사용자에게 data-only 메시지 전송 (Flutter에서 알림 제어)
+            msg = {
                 token: user.fcmToken,
                 data: {
-                    title: `${user.roomName}에서의 메시지`,
+                    title: title,
                     body: messageBody,
                     roomId: roomId.toString(),
                     routing: `/room/${roomId}`,
-                    badge: user.unread_count ? user.unread_count.toString() : "0",
-                    alarm: user.alarm ? user.alarm.toString() : "1",
-                    type: 'chat',
+                    badge: user.unread_count.toString(),
+                    alarm: user.alarm.toString(),
+                    type: "chat",
+                    notificationId: chat.chatId.toString(),
+                    // 🔧 모든 사용자에게 "1"로 보내서 Flutter에서 판단하게 함
+                    showNotification: "1"
                 },
-                // ❌ android.notification 제거: 중복 알림 방지
-                // ❌ notification 제거: 중복 알림 방지
+                android: {
+                    collapseKey: collapseKey,
+                    priority: "high",
+                    data: {
+                        title: title,
+                        body: messageBody,
+                        roomId: roomId.toString(),
+                        routing: `/room/${roomId}`,
+                        badge: user.unread_count.toString(),
+                        alarm: user.alarm.toString(),
+                        type: "chat",
+                        notificationId: chat.chatId.toString(),
+                        showNotification: "1"
+                    }
+                },
                 apns: {
-                    payload: {
-                        aps: {
-                            sound: "default",
-                            badge: user.unread_count || 0,
-                        },
+                    headers: {
+                        "apns-collapse-id": collapseKey,
+                        "apns-priority": isOnline ? "5" : "10"
                     },
-                },
-            };
-
-            try {
-                await admin.messaging().send(message);
-                console.log(`✅ FCM 전송 성공: ${user.uid}`);
-            } catch (error) {
-                // 토큰이 무효한 경우 처리
-                if (error.code === 'messaging/registration-token-not-registered') {
-                    console.log(`무효한 토큰 삭제: ${user.uid}`);
-                    await pool.query('UPDATE user SET fcmToken = NULL WHERE uid = ?', [user.uid]);
-                } else {
-                    console.error(`❌ FCM 전송 실패 (${user.uid}):`, error.message);
+                    payload: {
+                        aps: isOnline ? {
+                            "content-available": 1,
+                            badge: user.unread_count
+                        } : {
+                            "content-available": 1,
+                            alert: {
+                                title: title,
+                                body: messageBody
+                            },
+                            sound: "default",
+                            badge: user.unread_count,
+                            category: "nadal_notification",
+                            "thread-id": collapseKey
+                        },
+                        title: title,
+                        body: messageBody,
+                        roomId: roomId.toString(),
+                        routing: `/room/${roomId}`,
+                        badge: user.unread_count.toString(),
+                        alarm: user.alarm.toString(),
+                        type: "chat",
+                        notificationId: chat.chatId.toString(),
+                        showNotification: "1"
+                    }
                 }
-            }
+            };
+            
+            console.log(`📱 ${isOnline ? "온라인" : "오프라인"} 사용자 data-only 전송: ${user.uid}`);
+
+            // FCM 전송 시도
+            return await sendFCMWithRetry(user, msg, isOnline);
         });
 
-        // 모든 알림 전송 완료 대기
-        await Promise.allSettled(notificationPromises);
-
-        console.log('🎉 채팅 알림 처리 완료');
-
+        // 모든 전송 완료 대기
+        const results = await Promise.allSettled(sendPromises);
+        
+        // 결과 로깅
+        const successCount = results.filter(r => r.status === 'fulfilled').length;
+        const failureCount = results.filter(r => r.status === 'rejected').length;
+        
+        console.log(`📊 FCM 전송 결과 - 성공: ${successCount}, 실패: ${failureCount}, 총: ${rows.length}`);
+        
     } catch (error) {
-        console.error("푸시 알림 전송 중 오류 발생:", error);
+        console.error("❌ 푸시 알림 전송 중 치명적 오류:", error);
         throw error;
     }
+}
+
+// FCM 전송 재시도 로직
+async function sendFCMWithRetry(user, message, isOnline, maxRetries = 3) {
+    let lastError;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            const response = await admin.messaging().send(message);
+            console.log(`✅ FCM 전송 성공: ${user.uid} (${isOnline ? "online" : "offline"}) - 시도: ${attempt}`);
+            return response;
+        } catch (error) {
+            lastError = error;
+            
+            // 복구 불가능한 오류들
+            if (error.code === "messaging/registration-token-not-registered" || 
+                error.code === "messaging/invalid-registration-token") {
+                await handleInvalidToken(user.uid);
+                console.log(`🔄 무효 토큰 삭제: ${user.uid}`);
+                break;
+            }
+            
+            // 일시적 오류인 경우 재시도
+            if (attempt < maxRetries && isRetryableError(error)) {
+                console.log(`⚠️ FCM 전송 재시도 (${attempt}/${maxRetries}): ${user.uid} - ${error.message}`);
+                await sleep(1000 * attempt); // 지수 백오프
+                continue;
+            }
+            
+            // 최종 실패
+            console.error(`❌ FCM 전송 최종 실패 (${user.uid}):`, error.message);
+            break;
+        }
+    }
+    
+    throw lastError;
+}
+
+// 무효 토큰 처리
+async function handleInvalidToken(uid) {
+    try {
+        await pool.query(`UPDATE user SET fcmToken = NULL WHERE uid = ?`, [uid]);
+    } catch (error) {
+        console.error(`토큰 삭제 실패 (${uid}):`, error);
+    }
+}
+
+// 재시도 가능한 오류 판단
+function isRetryableError(error) {
+    const retryableCodes = [
+        'messaging/internal-error',
+        'messaging/server-unavailable',
+        'messaging/timeout',
+        'messaging/quota-exceeded'
+    ];
+    return retryableCodes.includes(error.code);
+}
+
+// 유틸리티: 슬립 함수
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // 특정 채팅 포맷형식으로 가져오기

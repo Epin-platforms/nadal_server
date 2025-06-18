@@ -14,7 +14,6 @@ router.get('/chatsBefore', getChatsBefore);
 router.get('/chatsAfter', getChatsAfter);
 
 
-
 //재연결시 
 router.get('/reconnect', reconnectChat);
 export default router; 

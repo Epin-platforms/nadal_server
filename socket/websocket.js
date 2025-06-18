@@ -8,6 +8,9 @@ let userRoomCount = new Map();
 // 간단한 채널 접근 권한 캐시
 let roomAccessCache = new Map();
 
+// 🔧 **추가: 핑퐁 관리**
+let pingIntervals = new Map(); // 사용자별 ping 인터벌 관리
+
 export function setupWebSocket(server) {
   console.log('소켓 서버 시작');
   
@@ -15,7 +18,12 @@ export function setupWebSocket(server) {
   io = new Server(server, {
     cors: {
       origin: '*'
-    }
+    },
+    // 🔧 **추가: Socket.IO 설정 개선**
+    pingTimeout: 60000,    // 60초 후 연결 해제
+    pingInterval: 25000,   // 25초마다 ping 전송
+    upgradeTimeout: 30000, // 30초 업그레이드 타임아웃
+    allowEIO3: true       // EIO3 호환성
   });
   
   // 최소한의 연결 검증 (클라이언트에서 전송한 UID 사용)
@@ -48,12 +56,21 @@ export function setupWebSocket(server) {
     userSocketMap.set(uid, socket.id);
     console.log(`${uid} 유저가 서버에 접속 ${socket.id}`);
 
+    // 🔧 **추가: 핑퐁 처리**
+    setupPingPong(socket, uid);
     
     // 소켓 연결 해제 시 처리
-    socket.on('disconnect', () => {
-      console.log(`사용자 나감 : ${uid}`);
+    socket.on('disconnect', (reason) => {
+      console.log(`사용자 나감 : ${uid}, 이유: ${reason}`);
+      
+      // 🔧 **추가: 핑퐁 정리**
+      cleanupPingPong(uid);
+      
       userSocketMap.delete(uid);
       userRoomCount.delete(uid);
+      
+      // 방 접근 캐시에서 해당 유저 관련 항목들 정리
+      cleanupUserCache(uid);
       
       // 모든 방에서 자동 퇴장 처리 (메모리 누수 방지)
       socket.rooms.forEach(room => {
@@ -158,6 +175,54 @@ export function setupWebSocket(server) {
   return io;
 }
 
+// 🔧 **추가: 핑퐁 설정 함수**
+function setupPingPong(socket, uid) {
+  // 클라이언트에서 ping을 받으면 pong으로 응답
+  socket.on('ping', () => {
+    socket.emit('pong');
+    console.log(`🏓 ${uid}에게 pong 응답 전송`);
+  });
+
+  // 🔧 **추가: 서버에서 주기적으로 ping 전송 (선택사항)**
+  const pingInterval = setInterval(() => {
+    if (socket.connected) {
+      socket.emit('serverPing');
+      console.log(`📡 ${uid}에게 서버 ping 전송`);
+    } else {
+      clearInterval(pingInterval);
+      pingIntervals.delete(uid);
+    }
+  }, 30000); // 30초마다 ping 전송
+
+  pingIntervals.set(uid, pingInterval);
+
+  // 클라이언트에서 서버 ping에 대한 응답
+  socket.on('serverPong', () => {
+    console.log(`🏓 ${uid}로부터 서버 pong 응답 수신`);
+  });
+}
+
+// 🔧 **추가: 핑퐁 정리 함수**
+function cleanupPingPong(uid) {
+  const pingInterval = pingIntervals.get(uid);
+  if (pingInterval) {
+    clearInterval(pingInterval);
+    pingIntervals.delete(uid);
+    console.log(`🧹 ${uid}의 ping 인터벌 정리됨`);
+  }
+}
+
+// 🔧 **추가: 사용자 캐시 정리 함수**
+function cleanupUserCache(uid) {
+  // 해당 사용자와 관련된 모든 캐시 항목 삭제
+  for (const [key, value] of roomAccessCache.entries()) {
+    if (key.startsWith(`${uid}_`)) {
+      roomAccessCache.delete(key);
+    }
+  }
+  console.log(`🧹 ${uid}의 캐시 정리됨`);
+}
+
 // 방 접근 권한 확인 함수
 async function checkRoomAccess(uid, roomId) {
   try {
@@ -197,4 +262,38 @@ export function getSocketIdByUid(uid) {
   // Map에 uid 키가 있으면 socketId를 꺼내고, 없으면 null 반환
   const socketId = userSocketMap.get(uid) ?? null;
   return socketId;
+}
+
+// 🔧 **추가: 연결 상태 체크 유틸리티 함수**
+export function checkUserConnection(uid) {
+  const socketId = userSocketMap.get(uid);
+  if (!socketId) return false;
+  
+  const socket = io.sockets.sockets.get(socketId);
+  return socket && socket.connected;
+}
+
+// 🔧 **추가: 전체 연결 상태 정리 함수 (정기적으로 호출 권장)**
+export function cleanupDisconnectedUsers() {
+  const disconnectedUsers = [];
+  
+  for (const [uid, socketId] of userSocketMap.entries()) {
+    const socket = io.sockets.sockets.get(socketId);
+    if (!socket || !socket.connected) {
+      disconnectedUsers.push(uid);
+    }
+  }
+  
+  disconnectedUsers.forEach(uid => {
+    userSocketMap.delete(uid);
+    userRoomCount.delete(uid);
+    cleanupPingPong(uid);
+    cleanupUserCache(uid);
+  });
+  
+  if (disconnectedUsers.length > 0) {
+    console.log(`🧹 끊어진 연결 정리: ${disconnectedUsers.length}명`);
+  }
+  
+  return disconnectedUsers.length;
 }

@@ -89,7 +89,7 @@ export async function updateDBRoom(req, res) {
       }
   
       // ✅ 필드 업데이트
-      const allowedFields = ['roomName', 'local', 'city', 'description', 'tag', 'roomImage', 'enterCode', 'useNickname'];
+      const allowedFields = ['roomName', 'local', 'city', 'description', 'tag', 'roomImage', 'enterCode'];
       const filtered = {};
   
       for (const key of Object.keys(room)) {  // room 사용

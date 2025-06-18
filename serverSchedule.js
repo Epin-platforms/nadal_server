@@ -7,7 +7,7 @@ const date_sub_chat         = 30;
 const date_sub_notification = 7;
 const date_sub_schedule     = 10;
 const date_sub_roomLog      = 30;
-const date_sub_league = 90;
+const date_sub_league       = 90;
 
 
 // 예약 작업 ID를 담아두는 배열 (취소용)

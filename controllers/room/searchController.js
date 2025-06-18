@@ -213,33 +213,34 @@ export async function searchRooms(req, res) {
         const searchPattern = `%${text}%`;
         
         const q = `
-            SELECT 
+                SELECT 
                 r.roomId,
                 r.roomName,
                 r.roomImage,
                 r.tag,
                 r.description,
                 r.local,
-                COUNT(rm2.roomId) AS memberCount
+                COUNT(rm2.roomId) AS memberCount,
+                CASE WHEN rm.uid IS NOT NULL THEN 1 ELSE 0 END AS isJoined
             FROM room r
             LEFT JOIN roomMember rm ON r.roomId = rm.roomId AND rm.uid = ?
             LEFT JOIN roomMember rm2 ON r.roomId = rm2.roomId
-            WHERE rm.uid IS NULL
-                AND r.isOpen = ?
+            WHERE r.isOpen = ?
                 AND (
                     r.roomName LIKE ? OR
                     r.description LIKE ? OR
                     r.tag LIKE ?
                 )
-            GROUP BY r.roomId, r.roomName, r.roomImage, r.tag, r.description, r.local
+            GROUP BY r.roomId, r.roomName, r.roomImage, r.tag, r.description, r.local, rm.uid
             ORDER BY 
+                CASE WHEN rm.uid IS NOT NULL THEN 0 ELSE 1 END,  -- 가입된 방 우선
                 CASE 
                     WHEN r.roomName LIKE ? THEN 1
                     WHEN r.tag LIKE ? THEN 2
                     ELSE 3
                 END,
                 r.createAt DESC
-            LIMIT 10 OFFSET ?
+            LIMIT 10 OFFSET ?;
         `;
         
         const params = [
