@@ -82,9 +82,7 @@ export async function sendNotificationToGameMembers(scheduleId, messageContents)
               "apns-priority": isOnline ? "5" : "10"
             },
             payload: {
-              aps: isOnline ? {
-                "content-available": 1
-              } : {
+              aps: {
                 "content-available": 1,
                 alert: {
                   title: msgTitle,

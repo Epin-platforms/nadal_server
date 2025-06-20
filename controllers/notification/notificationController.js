@@ -158,12 +158,10 @@ async function sendNotification(model) {
       apns: {
         headers: {
           "apns-collapse-id": collapseKey,
-          "apns-priority": isOnline ? "5" : "10"
+          "apns-priority": "10"
         },
         payload: {
-          aps: isOnline ? {
-            "content-available": 1
-          } : {
+          aps: {
             "content-available": 1,
             alert: {
               title: title || '',
@@ -302,6 +300,7 @@ export async function removeNotification(req, res) {
       DELETE FROM notification
       WHERE notificationId = ? AND uid = ?;
     `;
+
     const [result] = await pool.query(q, [notificationId, uid]);
     
     if (result.affectedRows === 0) {

@@ -124,8 +124,7 @@ async function sendNotificationToRoomMembers(roomId, senderUid, chat) {
             INNER JOIN user u ON rm.uid = u.uid
             WHERE rm.roomId = ? 
               AND u.uid != ? 
-              AND u.fcmToken IS NOT NULL
-              AND rm.alarm = 1
+              AND u.fcmToken IS NOT NULL;
         `;
         
         const [rows] = await pool.query(q, [roomId, senderUid]);
@@ -167,13 +166,13 @@ async function sendNotificationToRoomMembers(roomId, senderUid, chat) {
                     alarm: user.alarm.toString(),
                     type: "chat",
                     notificationId: chat.chatId.toString(),
-                    // 🔧 모든 사용자에게 "1"로 보내서 Flutter에서 판단하게 함
                     showNotification: "1"
                 },
                 android: {
                     collapseKey: collapseKey,
                     priority: "high",
                     data: {
+                        tag: collapseKey,
                         title: title,
                         body: messageBody,
                         roomId: roomId.toString(),
@@ -188,14 +187,11 @@ async function sendNotificationToRoomMembers(roomId, senderUid, chat) {
                 apns: {
                     headers: {
                         "apns-collapse-id": collapseKey,
-                        "apns-priority": isOnline ? "5" : "10"
+                        "apns-priority": "10" // 🔥 항상 높은 우선순위
                     },
                     payload: {
-                        aps: isOnline ? {
-                            "content-available": 1,
-                            badge: user.unread_count
-                        } : {
-                            "content-available": 1,
+                        // 🔥 핵심 수정: 모든 상황에서 알림 표시
+                        aps: {
                             alert: {
                                 title: title,
                                 body: messageBody
@@ -203,8 +199,10 @@ async function sendNotificationToRoomMembers(roomId, senderUid, chat) {
                             sound: "default",
                             badge: user.unread_count,
                             category: "nadal_notification",
-                            "thread-id": collapseKey
+                            "thread-id": collapseKey,
+                            "content-available": 1  // 백그라운드 처리도 가능
                         },
+                        // 커스텀 데이터
                         title: title,
                         body: messageBody,
                         roomId: roomId.toString(),
