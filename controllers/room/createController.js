@@ -53,9 +53,9 @@ export async function createRoom(req, res) {
   //방명 중복검사
  export async function checkDuplicationRoomName(roomName, local, conn) {
     const q = `SELECT roomId FROM room WHERE roomName = ? AND local = ?`;
-    const [rows] = await conn.query(q, [roomName, local]);
+    const [rows] = await conn.query(q, [roomName, local, roomId]);
     return rows.length > 0;
-  }
+ }
   
   //방장 만들기
   async function createLeader(roomId, uid, conn) {

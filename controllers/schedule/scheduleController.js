@@ -145,7 +145,7 @@ export async function getSchedulesWithRoomId(req, res) {
     `;
 
     const [rows] = await pool.query(q, [roomId, from, to]);
-    res.json(rows);
+    res.status(200).json(rows);
   } catch (error) {
     console.error('스케줄리스트 (방정보) 쿼리에러', error);
     res.status(500).send();
@@ -215,7 +215,7 @@ export async function getUpdateRoomSchedule(req, res) {
       if(schedule.updateAt != updateAt){
         return res.json(schedule);
       }else if(schedule.scheduleMemberCount != scheduleMemberCount){
-        return res.status(203).send(schedule.scheduleMemberCount);
+        return res.status(203).json({ scheduleMemberCount : schedule.scheduleMemberCount});
       }
 
       res.status(201).send();

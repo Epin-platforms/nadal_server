@@ -67,6 +67,7 @@ export async function updateDBRoom(req, res) {
       if (room.roomName) { // 룸 네임 필드가 존재한다면
         // 방명 중복 체크 (오픈채팅방은 제외)
         const duple = await checkDuplicationRoomName(room.roomName, room.local, conn);
+
         if (duple) {
           await conn.rollback();
           return res.status(202).send();
